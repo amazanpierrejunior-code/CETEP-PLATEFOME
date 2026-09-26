@@ -59,7 +59,7 @@ app.get('/api/admin/buttons',auth,(req,res)=>res.json(db.prepare('SELECT * FROM 
 app.post('/api/admin/buttons',auth,(req,res)=>{const b=req.body||{};const r=db.prepare('INSERT INTO buttons(label,url,description) VALUES(?,?,?)').run(b.label,b.url,b.description||'');res.json({id:r.lastInsertRowid});});
 app.put('/api/admin/buttons/:id',auth,(req,res)=>{const b=req.body||{};db.prepare('UPDATE buttons SET label=?,url=?,description=?,active=? WHERE id=?').run(b.label,b.url,b.description||'',b.active===false?0:1,req.params.id);res.json({ok:true});});
 app.delete('/api/admin/buttons/:id',auth,(req,res)=>{db.prepare('DELETE FROM buttons WHERE id=?').run(req.params.id);res.json({ok:true});});
-pp.get('/api/admin/me',auth,(req,res)=>res.json({email:req.user.email}));
+app.get('/api/admin/me',auth,(req,res)=>res.json({email:req.user.email}));
 app.get('/admin',(req,res)=>res.sendFile(path.join(__dirname,'admin.html')));
 app.get('/',(req,res)=>res.sendFile(path.join(__dirname,'index.html')));
 app.listen(PORT,()=>console.log(`CETEP V4: http://localhost:${PORT}`));
