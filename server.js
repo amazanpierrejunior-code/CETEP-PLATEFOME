@@ -20,8 +20,13 @@ CREATE TABLE IF NOT EXISTS buttons(id INTEGER PRIMARY KEY AUTOINCREMENT,label TE
 `);
 const adminEmail=process.env.ADMIN_EMAIL||'admin@cetep.ht';
 const adminPassword=process.env.ADMIN_PASSWORD||'CHANGEZ_MOI';
-if(!db.prepare('SELECT id FROM admins WHERE email=?').get(adminEmail)){
-  db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(adminEmail,bcrypt.hashSync(adminPassword,12));
+const existingAdmin = db.prepare('SELECT id FROM admins WHERE email=?').get(adminEmail);
+if (!existingAdmin) {
+  db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)')
+    .run(adminEmail, bcrypt.hashSync(adminPassword, 12));
+} else {
+  db.prepare('UPDATE admins SET password_hash=? WHERE email=?')
+    .run(bcrypt.hashSync(adminPassword, 12), adminEmail);
 }
 if(db.prepare('SELECT COUNT(*) c FROM programs').get().c===0){
  const ins=db.prepare('INSERT INTO programs(name,duration,description,price_htg) VALUES(?,?,?,?)');
