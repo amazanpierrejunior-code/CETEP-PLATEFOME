@@ -5,11 +5,14 @@ const bcrypt=require('bcryptjs');
 const jwt=require('jsonwebtoken');
 const Database=require('better-sqlite3');
 const path=require('path');
+
 const app=express();
 const PORT=process.env.PORT||3000;
 const SECRET=process.env.JWT_SECRET||'CHANGE_ME_IN_PRODUCTION';
+
 const db=new Database(path.join(__dirname,'cetep.sqlite'));
 db.pragma('journal_mode = WAL');
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS programs(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,duration TEXT,description TEXT,price_htg REAL DEFAULT 0,active INTEGER DEFAULT 1);
@@ -17,8 +20,9 @@ CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY AUTOINCREMENT,student
 CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY AUTOINCREMENT,student_id INTEGER,amount_htg REAL NOT NULL,method TEXT NOT NULL,status TEXT DEFAULT 'En attente',reference TEXT UNIQUE,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(student_id) REFERENCES students(id));
 CREATE TABLE IF NOT EXISTS buttons(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT NOT NULL,url TEXT NOT NULL,description TEXT,active INTEGER DEFAULT 1);
 `);
-cconst adminEmail = process.env.ADMIN_EMAIL || 'admin@cetep.ht';
+const adminEmail = process.env.ADMIN_EMAIL || 'admin@cetep.ht';
 const adminPassword = process.env.ADMIN_PASSWORD || 'CHANGEZ_MOI';
+
 const existingAdmin = db.prepare('SELECT id FROM admins ORDER BY id LIMIT 1').get();
 if (existingAdmin) {
   db.prepare(`
@@ -39,9 +43,6 @@ if (existingAdmin) {
     bcrypt.hashSync(adminPassword, 12)
   );
 }
-} else {
-  db.prepare('UPDATE admins SET password_hash=? WHERE email=?')
-    .run(bcrypt.hashSync(adminPassword, 12), adminEmail);
 }
 if(db.prepare('SELECT COUNT(*) c FROM programs').get().c===0){
  const ins=db.prepare('INSERT INTO programs(name,duration,description,price_htg) VALUES(?,?,?,?)');
