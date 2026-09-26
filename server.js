@@ -8,6 +8,8 @@ const path=require('path');
 
 const app=express();
 const PORT=process.env.PORT||3000;
+app.use(express.json());
+app.use(cookieParser());
 const SECRET=process.env.JWT_SECRET||'CHANGE_ME_IN_PRODUCTION';
 
 const db=new Database(path.join(__dirname,'cetep.sqlite'));
