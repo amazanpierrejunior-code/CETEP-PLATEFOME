@@ -36,7 +36,7 @@ if(db.prepare('SELECT COUNT(*) c FROM buttons').get().c===0){
  ins.run('Paiement en ligne','#paiement','Payer les frais de formation');
  ins.run('BATON W','#baton','Découvrir le programme solidaire');
 }
-app.use(express.json());app.use(cookieParser());app.use(express.static(path.join(__dirname,'public')));
+app.use(express.static(__dirname));
 function auth(req,res,next){
  try{const token=req.cookies.cetep_token;if(!token)return res.status(401).json({error:'Non autorisé'});req.user=jwt.verify(token,SECRET);next();}
  catch(e){return res.status(401).json({error:'Session expirée'});}
