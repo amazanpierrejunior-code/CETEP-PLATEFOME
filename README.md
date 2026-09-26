@@ -1,20 +1,31 @@
-# CETEP — Plateforme V5
+# CETEP Plateforme V6
 
-**Centre d’Encadrement Technique et Professionnel (CETEP)**
+Centre d'Encadrement Technique et Professionnel.
 
-Plateforme web avec site public, admissions, espace administration, gestion des formations, étudiants, paiements manuels et boutons modifiables.
+## Modules
 
-## Démarrage local
-- Node.js 20+
-- `npm install`
-- copier `.env.example` vers `.env`
-- définir `ADMIN_EMAIL`, `ADMIN_PASSWORD` et `JWT_SECRET`
-- `npm start`
-- site: `http://localhost:3000`
-- admin: `http://localhost:3000/admin`
+- Administration
+- Professeurs
+- Étudiants
+- Formations
+- Modules et leçons
+- Suivi de progression
+- Devoirs et notes
+- Paiements
+- Activation / suspension / archivage des étudiants
+- Séparation des droits par rôle
 
-## Déploiement
-Voir `DEPLOIEMENT_RENDER.md` et `Dockerfile`.
+## Déploiement Render
 
-## Production
-Pour des données scolaires réelles, migrer SQLite vers PostgreSQL/Supabase avec sauvegardes et stockage persistant. Pour les paiements, intégrer uniquement les API officielles MonCash/NatCash/banque avec secrets côté serveur et vérification des webhooks.
+Variables d'environnement:
+
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD`
+- `JWT_SECRET`
+- `DATA_DIR` (optionnel, recommandé `/data` si un Persistent Disk Render est monté)
+
+Le serveur utilise `PORT` fourni automatiquement par Render.
+
+## Important
+
+Pour conserver SQLite après un redéploiement/restart Render, monter un Persistent Disk et définir `DATA_DIR=/data`.
