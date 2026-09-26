@@ -167,6 +167,11 @@ CREATE TABLE IF NOT EXISTS buttons (
   description TEXT,
   active INTEGER DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
 `);
 
 function hasColumn(table, column) {
@@ -176,6 +181,24 @@ function hasColumn(table, column) {
 if (!hasColumn("admins", "role")) db.exec("ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
 if (!hasColumn("students", "password_hash")) db.exec("ALTER TABLE students ADD COLUMN password_hash TEXT");
 if (!hasColumn("students", "access_enabled")) db.exec("ALTER TABLE students ADD COLUMN access_enabled INTEGER DEFAULT 0");
+if (!hasColumn("students", "birth_place")) db.exec("ALTER TABLE students ADD COLUMN birth_place TEXT");
+if (!hasColumn("students", "blood_group")) db.exec("ALTER TABLE students ADD COLUMN blood_group TEXT");
+if (!hasColumn("students", "responsible_person")) db.exec("ALTER TABLE students ADD COLUMN responsible_person TEXT");
+if (!hasColumn("students", "marital_status")) db.exec("ALTER TABLE students ADD COLUMN marital_status TEXT");
+
+const defaults = {
+  school_name: "CETEP",
+  school_full_name: "Centre d'Encadrement Technique et Professionnel",
+  slogan: "Formation • Orientation • Insertion professionnelle",
+  primary_color: "#0d2b52",
+  secondary_color: "#1677b8",
+  accent_color: "#087443",
+  logo_text: "CETEP",
+  logo_url: ""
+};
+for (const [key,value] of Object.entries(defaults)) {
+  db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)").run(key,value);
+}
 
 const admin = db.prepare("SELECT id FROM admins ORDER BY id LIMIT 1").get();
 const adminHash = bcrypt.hashSync(ADMIN_PASSWORD, 12);
@@ -224,16 +247,22 @@ function requireRole(...roles) {
   };
 }
 
-function nextStudentNo() {
-  const year = new Date().getFullYear();
-  const count = db.prepare("SELECT COUNT(*) c FROM students").get().c;
-  return `CETEP-${year}-${String(count + 1).padStart(4, "0")}`;
-}
-
 function nextTeacherNo() {
   const year = new Date().getFullYear();
   const count = db.prepare("SELECT COUNT(*) c FROM teachers").get().c;
   return `PROF-${year}-${String(count + 1).padStart(4, "0")}`;
+}
+
+function nextStudentNo() {
+  const year = new Date().getFullYear();
+  let n = db.prepare("SELECT COUNT(*) c FROM students").get().c + 1;
+  let no = `CETEP-${year}-${String(n).padStart(4, "0")}`;
+  while (db.prepare("SELECT 1 FROM students WHERE student_no=?").get(no)) { n += 1; no = `CETEP-${year}-${String(n).padStart(4, "0")}`; }
+  return no;
+}
+
+function getSettings() {
+  return Object.fromEntries(db.prepare("SELECT key,value FROM settings").all().map(x => [x.key,x.value]));
 }
 
 function studentAccess(req, res, next) {
@@ -248,7 +277,7 @@ function studentAccess(req, res, next) {
 
 app.use(express.static(__dirname));
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "CETEP V6" }));
+app.get("/health", (req, res) => res.json({ ok: true, service: "CETEP V7 FINAL" }));
 
 app.post("/api/login", (req, res) => {
   const { email, password } = req.body || {};
@@ -314,6 +343,18 @@ app.post("/api/admissions", (req, res) => {
   } catch(e) { res.status(400).json({ error:e.message }); }
 });
 
+app.get("/api/admin/settings", auth, requireRole("admin"), (req,res) => res.json(getSettings()));
+
+app.put("/api/admin/settings", auth, requireRole("admin"), (req,res) => {
+  const allowed = ["school_name","school_full_name","slogan","primary_color","secondary_color","accent_color","logo_text","logo_url"];
+  const stmt = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+  const tx = db.transaction(() => { for (const key of allowed) if (req.body && req.body[key] !== undefined) stmt.run(key,String(req.body[key])); });
+  tx();
+  res.json({ok:true,settings:getSettings()});
+});
+
+app.get("/api/public/settings", (req,res) => res.json(getSettings()));
+
 app.get("/api/admin/stats", auth, requireRole("admin"), (req,res) => {
   res.json({
     students: db.prepare("SELECT COUNT(*) c FROM students").get().c,
@@ -329,6 +370,23 @@ app.get("/api/admin/students", auth, requireRole("admin"), (req,res) => {
   res.json(db.prepare(`SELECT s.*, p.name program_name FROM students s LEFT JOIN programs p ON p.id=s.program_id ORDER BY s.id DESC`).all());
 });
 
+app.post("/api/admin/students", auth, requireRole("admin"), (req,res) => {
+  try {
+    const b=req.body||{};
+    if(!b.name || !b.phone || !b.program_id) return res.status(400).json({error:"Nom, téléphone et formation sont obligatoires."});
+    const p=db.prepare("SELECT id FROM programs WHERE id=? AND active=1").get(Number(b.program_id));
+    if(!p) return res.status(400).json({error:"Formation invalide."});
+    const no=nextStudentNo();
+    const password=String(b.password||"123456");
+    if(password.length<6) return res.status(400).json({error:"Mot de passe: 6 caractères minimum."});
+    const hash=bcrypt.hashSync(password,12);
+    const r=db.prepare(`INSERT INTO students(student_no,name,birth_date,birth_place,phone,email,program_id,education,blood_group,responsible_person,marital_status,status,password_hash,access_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(no,b.name,b.birth_date||null,b.birth_place||null,b.phone,b.email||null,Number(b.program_id),b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.status||"Actif",hash,b.access_enabled===false?0:1);
+    db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status) VALUES(?,?,?)").run(r.lastInsertRowid,Number(b.program_id),b.access_enabled===false?"En attente":"Actif");
+    res.status(201).json({ok:true,id:r.lastInsertRowid,student_no:no});
+  } catch(e){ res.status(400).json({error:e.message}); }
+});
+
 app.post("/api/admin/students/:id/access", auth, requireRole("admin"), (req,res) => {
   const { enabled, status, password } = req.body || {};
   const s = db.prepare("SELECT * FROM students WHERE id=?").get(req.params.id);
@@ -339,6 +397,18 @@ app.post("/api/admin/students/:id/access", auth, requireRole("admin"), (req,res)
   db.prepare("UPDATE students SET access_enabled=?, status=?, password_hash=? WHERE id=?")
     .run(enabled ? 1 : 0, newStatus, hash, s.id);
   res.json({ok:true, message: enabled ? "Accès activé." : "Accès fermé."});
+});
+
+app.put("/api/admin/students/:id", auth, requireRole("admin"), (req,res) => {
+  try {
+    const b=req.body||{};
+    const old=db.prepare("SELECT * FROM students WHERE id=?").get(req.params.id);
+    if(!old) return res.status(404).json({error:"Étudiant introuvable"});
+    db.prepare(`UPDATE students SET name=?,birth_date=?,birth_place=?,phone=?,email=?,program_id=?,education=?,blood_group=?,responsible_person=?,marital_status=?,status=? WHERE id=?`)
+      .run(b.name||old.name,b.birth_date||null,b.birth_place||null,b.phone||null,b.email||null,b.program_id?Number(b.program_id):null,b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.status||old.status,req.params.id);
+    if(b.program_id) db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status) VALUES(?,?,?)").run(req.params.id,Number(b.program_id),b.status==='Suspendu'?"Suspendu":"Actif");
+    res.json({ok:true});
+  } catch(e){res.status(400).json({error:e.message});}
 });
 
 app.post("/api/admin/students/:id/reset-password", auth, requireRole("admin"), (req,res) => {
@@ -416,6 +486,19 @@ app.get("/api/admin/lessons", auth, requireRole("admin"), (req,res) => {
   res.json(db.prepare(`SELECT l.*,m.title module_title,p.name program_name
     FROM lessons l JOIN modules m ON m.id=l.module_id JOIN programs p ON p.id=m.program_id
     ORDER BY p.id,m.order_no,l.order_no,l.id`).all());
+});
+
+app.get("/api/admin/enrollments", auth, requireRole("admin"), (req,res) => {
+  res.json(db.prepare(`SELECT e.id,e.student_id,e.program_id,e.status,s.student_no,s.name student_name,p.name program_name FROM enrollments e JOIN students s ON s.id=e.student_id JOIN programs p ON p.id=e.program_id ORDER BY e.id DESC`).all());
+});
+
+app.get("/api/admin/teacher-assignments", auth, requireRole("admin"), (req,res) => {
+  res.json(db.prepare(`SELECT pt.program_id,pt.teacher_id,t.teacher_no,t.name teacher_name,p.name program_name FROM program_teachers pt JOIN teachers t ON t.id=pt.teacher_id JOIN programs p ON p.id=pt.program_id ORDER BY p.name,t.name`).all());
+});
+
+app.delete("/api/admin/teacher-assign", auth, requireRole("admin"), (req,res) => {
+  db.prepare("DELETE FROM program_teachers WHERE program_id=? AND teacher_id=?").run(req.body.program_id,req.body.teacher_id);
+  res.json({ok:true});
 });
 
 app.post("/api/admin/assign-teacher", auth, requireRole("admin"), (req,res) => {
@@ -573,4 +656,4 @@ app.get("/teacher", (req,res)=>res.sendFile(path.join(__dirname,"teacher.html"))
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"login.html")));
 app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"index.html")));
 
-app.listen(PORT,()=>console.log(`CETEP V6: http://localhost:${PORT}`));
+app.listen(PORT,()=>console.log(`CETEP V7 FINAL: http://localhost:${PORT}`));

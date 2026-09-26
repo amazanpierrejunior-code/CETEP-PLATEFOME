@@ -1,31 +1,25 @@
-# CETEP Plateforme V6
+# CETEP V7 FINAL
 
-Centre d'Encadrement Technique et Professionnel.
+Plateforme de gestion et de formation en ligne pour le Centre d’Encadrement Technique et Professionnel.
 
-## Modules
-
-- Administration
-- Professeurs
-- Étudiants
-- Formations
-- Modules et leçons
-- Suivi de progression
-- Devoirs et notes
+## Fonctions
+- Administration complète
+- Ajout/modification d’étudiants avec code CETEP automatique
+- Activation/suspension et réinitialisation des accès étudiants
+- Gestion des professeurs et affectation aux formations
+- Création/modification de formations
+- Modules, leçons, vidéos, PDF et devoirs
 - Paiements
-- Activation / suspension / archivage des étudiants
-- Séparation des droits par rôle
+- Personnalisation du nom, slogan, logo et couleurs du Dashboard
+- Espaces Admin, Étudiant et Professeur
 
-## Déploiement Render
-
-Variables d'environnement:
-
+## Render
+Conservez ces variables d’environnement :
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
 - `JWT_SECRET`
-- `DATA_DIR` (optionnel, recommandé `/data` si un Persistent Disk Render est monté)
 
-Le serveur utilise `PORT` fourni automatiquement par Render.
+Pour conserver SQLite après redémarrage/redeploy, utilisez un stockage persistant compatible avec votre offre Render et définissez `DATA_DIR=/data`.
 
-## Important
-
-Pour conserver SQLite après un redéploiement/restart Render, monter un Persistent Disk et définir `DATA_DIR=/data`.
+## Déploiement
+Le dépôt doit contenir les fichiers du projet à la racine (`package.json`, `server.js`, `Dockerfile`, HTML, CSS), pas seulement le fichier ZIP.
