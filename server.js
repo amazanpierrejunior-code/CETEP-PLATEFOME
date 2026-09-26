@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY AUTOINCREMENT,student
 CREATE TABLE IF NOT EXISTS buttons(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT NOT NULL,url TEXT NOT NULL,description TEXT,active INTEGER DEFAULT 1);
 `);
 const adminEmail=process.env.ADMIN_EMAIL||'admin@cetep.ht';
-const adminPassword=process.env.ADMIN_PASSWORD||'CHANGEZ_MOI';
+const adminPassword=process.env.ADMIN_PASSWORD||'@Amazan1234';
 const existingAdmin = db.prepare('SELECT id FROM admins WHERE email=?').get(adminEmail);
 if (!existingAdmin) {
   db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)')
