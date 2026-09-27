@@ -13,7 +13,7 @@ function settings(){return Object.fromEntries(db.prepare('SELECT key,value FROM 
 function studentNo(){let n=db.prepare('SELECT COUNT(*) c FROM students').get().c+1;let x=`CETEP-${new Date().getFullYear()}-${String(n).padStart(4,'0')}`;while(db.prepare('SELECT 1 FROM students WHERE student_no=?').get(x)){n++;x=`CETEP-${new Date().getFullYear()}-${String(n).padStart(4,'0')}`}return x}
 app.use(express.static(__dirname));
 app.get('/health',(req,res)=>res.json({ok:true,service:'CETEP',version:'9.0.0'}));
-app.get('/',(req,res)=>res.sendFile(path.join(__dirname,'index.html')));app.get('/admin',(req,res)=>res.sendFile(path.join(__dirname,'admin.html')));app.get('/login',(req,res)=>res.sendFile(path.join(__dirname,'login.html')));
+app.get('/',(req,res)=>res.sendFile(path.join(__dirname,'index.html')));app.get('/admin',(req,res)=>res.sendFile(path.join(__dirname,'admin.html')));app.get('/login',(req,res)=>res.sendFile(path.join(__dirname,'login.html')));app.get('/undefined',(req,res)=>res.redirect('/'));
 app.post('/api/login',(req,res)=>{const a=db.prepare('SELECT * FROM admins WHERE email=?').get(req.body?.email||'');if(!a||!bcrypt.compareSync(req.body?.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',jwt.sign({id:a.id,email:a.email,role:'admin'},SECRET,{expiresIn:'8h'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:28800000});res.json({ok:true})});
 app.post('/api/logout',(req,res)=>{res.clearCookie('cetep_token');res.json({ok:true})});
 app.get('/api/public/settings',(req,res)=>res.json(settings()));app.get('/api/public/programs',(req,res)=>res.json(db.prepare('SELECT * FROM programs WHERE active=1 ORDER BY id').all()));
