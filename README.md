@@ -1,25 +1,10 @@
-# CETEP V7 FINAL
+# CETEP — Version finale
+Centre d'Encadrement Technique et Professionnel.
 
-Plateforme de gestion et de formation en ligne pour le Centre d’Encadrement Technique et Professionnel.
+Fonctions: site public, admissions, dashboard administration, étudiants, professeurs, formations, modules/leçons, paiements, identité et couleurs modifiables, changement de logo par URL ou téléversement.
 
-## Fonctions
-- Administration complète
-- Ajout/modification d’étudiants avec code CETEP automatique
-- Activation/suspension et réinitialisation des accès étudiants
-- Gestion des professeurs et affectation aux formations
-- Création/modification de formations
-- Modules, leçons, vidéos, PDF et devoirs
-- Paiements
-- Personnalisation du nom, slogan, logo et couleurs du Dashboard
-- Espaces Admin, Étudiant et Professeur
+Variables Render: ADMIN_EMAIL, ADMIN_PASSWORD, JWT_SECRET. Pour une conservation durable des données scolaires, utiliser une base persistante PostgreSQL/Supabase ou un stockage persistant.
 
-## Render
-Conservez ces variables d’environnement :
-- `ADMIN_EMAIL`
-- `ADMIN_PASSWORD`
-- `JWT_SECRET`
 
-Pour conserver SQLite après redémarrage/redeploy, utilisez un stockage persistant compatible avec votre offre Render et définissez `DATA_DIR=/data`.
-
-## Déploiement
-Le dépôt doit contenir les fichiers du projet à la racine (`package.json`, `server.js`, `Dockerfile`, HTML, CSS), pas seulement le fichier ZIP.
+## Persistence on Render
+This final build stores SQLite and uploaded logo data under `/app/data`. The included `render.yaml` attaches a 1 GB persistent disk to that path on a paid Starter web service, so students, formations, payments, settings, and uploaded logos survive deploys/restarts. Render Free web services have ephemeral filesystems, so do not deploy this persistence setup on the Free plan if you need the data to survive.
