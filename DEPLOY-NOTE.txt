@@ -1,0 +1,13 @@
+CETEP FINAL DEPLOY
+
+IMPORTANT: Upload the CONTENTS of this folder directly into the ROOT of the GitHub repository CETEP-PLATEFOME.
+Do NOT upload the CETEP-DEPLOY-FINAL folder itself and do NOT create CETEP-FINAL/CETEP-FINAL nesting.
+
+This version includes:
+- /admin appearance controls with logo upload (PNG/JPG/WebP, max 2 MB)
+- logo saved as a data URL in SQLite settings
+- logo reset button
+- editable school name/full name/slogan
+- editable dashboard colors
+- /app/data database path for Render persistent disk
+- render.yaml with 1 GB persistent disk configuration
