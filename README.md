@@ -1,4 +1,4 @@
-# CETEP Plateforme v10
+# CETEP Plateforme v10.1 FINAL
 
 Plateforme de gestion et formation en ligne pour le Centre d'Encadrement Technique et Professionnel.
 
@@ -16,3 +16,11 @@ Plateforme de gestion et formation en ligne pour le Centre d'Encadrement Techniq
 Le `render.yaml` attache un persistent disk à `/app/data`. Render précise que le filesystem normal est éphémère et qu'un persistent disk est nécessaire pour conserver des fichiers locaux; les disques persistants sont disponibles sur les web services payants. Voir https://render.com/docs/disks.
 
 Variables: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`, `DATA_DIR=/app/data`.
+
+## Correctifs v10.1
+- Correctif du démarrage SQLite pour la méthode Compte bancaire.
+- CMD Docker direct `node server.js` pour une gestion correcte des signaux Render.
+- `/health` retourne la version 10.1.0.
+
+## Persistance Render
+Le mode SQLite conserve les données dans `DATA_DIR`. Pour conserver ces données entre redéploiements, utilisez un persistent disk Render (service payant) ou migrez vers une base de données managée. Render indique que le filesystem des services est éphémère par défaut.
