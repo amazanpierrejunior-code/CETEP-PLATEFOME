@@ -18,9 +18,10 @@ app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-const SECRET = process.env.JWT_SECRET || "CHANGE_ME_IN_PRODUCTION";
+const SECRET = process.env.JWT_SECRET || "CETEP_DEV_SECRET_CHANGE_IN_RENDER";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@cetep.ht";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "CHANGEZ_MOI";
+const FORCE_ADMIN_RESET = process.env.FORCE_ADMIN_RESET === "true";
 
 const db = new Database(path.join(DATA_DIR, "cetep.sqlite"));
 db.pragma("journal_mode = WAL");
@@ -200,12 +201,13 @@ for (const [key,value] of Object.entries(defaults)) {
   db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)").run(key,value);
 }
 
-const admin = db.prepare("SELECT id FROM admins ORDER BY id LIMIT 1").get();
-const adminHash = bcrypt.hashSync(ADMIN_PASSWORD, 12);
-if (admin) {
-  db.prepare("UPDATE admins SET email=?, password_hash=?, role='admin' WHERE id=?").run(ADMIN_EMAIL, adminHash, admin.id);
-} else {
+const admin = db.prepare("SELECT id,email FROM admins ORDER BY id LIMIT 1").get();
+if (!admin) {
+  const adminHash = bcrypt.hashSync(ADMIN_PASSWORD, 12);
   db.prepare("INSERT INTO admins(email,password_hash,role) VALUES(?,?,?)").run(ADMIN_EMAIL, adminHash, "admin");
+} else if (FORCE_ADMIN_RESET) {
+  const adminHash = bcrypt.hashSync(ADMIN_PASSWORD, 12);
+  db.prepare("UPDATE admins SET email=?, password_hash=?, role='admin' WHERE id=?").run(ADMIN_EMAIL, adminHash, admin.id);
 }
 
 if (db.prepare("SELECT COUNT(*) c FROM programs").get().c === 0) {
@@ -277,7 +279,7 @@ function studentAccess(req, res, next) {
 
 app.use(express.static(__dirname));
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "CETEP V7 FINAL" }));
+app.get("/health", (req, res) => res.json({ ok: true, service: "CETEP V8 FINAL", version: "8.0.0" }));
 
 app.post("/api/login", (req, res) => {
   const { email, password } = req.body || {};
@@ -651,8 +653,11 @@ app.post("/api/student/assignments/:id/submit", auth, studentAccess, (req,res) =
 });
 
 app.get("/admin", (req,res)=>res.sendFile(path.join(__dirname,"admin.html")));
+app.get("/administration", (req,res)=>res.redirect("/admin"));
 app.get("/student", (req,res)=>res.sendFile(path.join(__dirname,"student.html")));
+app.get("/etudiant", (req,res)=>res.redirect("/student"));
 app.get("/teacher", (req,res)=>res.sendFile(path.join(__dirname,"teacher.html")));
+app.get("/professeur", (req,res)=>res.redirect("/teacher"));
 app.get("/login", (req,res)=>res.sendFile(path.join(__dirname,"login.html")));
 app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"index.html")));
 
