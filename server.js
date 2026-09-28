@@ -356,16 +356,63 @@ app.get('/health', (req, res) => {
    PUBLIC PAGES
 ========================================================= */
 
+/* =========================================================
+   PUBLIC PAGES
+========================================================= */
+
+function sendPage(res, filename) {
+  const publicPath = path.join(__dirname, 'public', filename);
+  const rootPath = path.join(__dirname, filename);
+
+  if (fs.existsSync(publicPath)) {
+    return res.sendFile(publicPath);
+  }
+
+  if (fs.existsSync(rootPath)) {
+    return res.sendFile(rootPath);
+  }
+
+  return res.status(404).send('Page introuvable: ' + filename);
+}
+
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  sendPage(res, 'index.html');
 });
 
 app.get('/login', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+  sendPage(res, 'login.html');
 });
 
 app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+  sendPage(res, 'admin.html');
+});
+
+app.get('/teacher', (req, res) => {
+  sendPage(res, 'teacher.html');
+});
+
+app.get('/student', (req, res) => {
+  sendPage(res, 'student.html');
+});
+
+app.get('/', (req, res) => {
+  sendPage(res, 'index.html');
+});
+
+app.get('/login', (req, res) => {
+  sendPage(res, 'login.html');
+});
+
+app.get('/admin', (req, res) => {
+  sendPage(res, 'admin.html');
+});
+
+app.get('/teacher', (req, res) => {
+  sendPage(res, 'teacher.html');
+});
+
+app.get('/student', (req, res) => {
+  sendPage(res, 'student.html');
 });
 
 app.get('/teacher', (req, res) => {
