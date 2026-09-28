@@ -1,1 +1,303 @@
-{"name":"cetep-plateforme","version":"10.1.0","private":true,"scripts":{"start":"node server.js"},"dependencies":{"bcryptjs":"^2.4.3","better-sqlite3":"^11.10.0","cookie-parser":"^1.4.7","dotenv":"^16.5.0","express":"^5.1.0","jsonwebtoken":"^9.0.2"}}
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CETEP — Connexion</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+<main class="container" style="max-width:500px;padding-top:80px">
+
+<div class="card">
+
+<div style="text-align:center;margin-bottom:25px">
+
+<div class="logo" style="margin:0 auto 12px;width:70px;height:70px">
+<img src="/logo.png" alt="CETEP"
+     onerror="this.style.display='none'">
+</div>
+
+<h1 style="margin-bottom:5px">CETEP — Connexion</h1>
+
+<p style="color:#667085;margin-top:0">
+Choisissez votre espace.
+</p>
+
+</div>
+
+
+<div class="row" style="margin-bottom:15px">
+
+<button
+type="button"
+class="btn"
+onclick="show('admin')">
+Administration
+</button>
+
+<button
+type="button"
+class="btn"
+onclick="show('teacher')">
+Professeur
+</button>
+
+<button
+type="button"
+class="btn"
+onclick="show('student')">
+Étudiant
+</button>
+
+</div>
+
+
+<!-- ADMINISTRATION -->
+
+<form id="admin" style="margin-top:20px">
+
+<h2>Administration</h2>
+
+<input
+class="input"
+name="email"
+type="email"
+placeholder="Email administrateur"
+autocomplete="username"
+required>
+
+<input
+class="input"
+name="password"
+type="password"
+placeholder="Mot de passe"
+autocomplete="current-password"
+required>
+
+<button
+class="btn"
+type="submit"
+style="width:100%">
+Se connecter
+</button>
+
+</form>
+
+
+<!-- PROFESSEUR -->
+
+<form
+id="teacher"
+class="hidden"
+style="margin-top:20px">
+
+<h2>Espace professeur</h2>
+
+<input
+class="input"
+name="email"
+type="email"
+placeholder="Email professeur"
+autocomplete="username"
+required>
+
+<input
+class="input"
+name="password"
+type="password"
+placeholder="Mot de passe"
+autocomplete="current-password"
+required>
+
+<button
+class="btn"
+type="submit"
+style="width:100%">
+Se connecter
+</button>
+
+</form>
+
+
+<!-- ETUDIANT -->
+
+<form
+id="student"
+class="hidden"
+style="margin-top:20px">
+
+<h2>Espace étudiant</h2>
+
+<input
+class="input"
+name="code"
+placeholder="Code CETEP-..."
+autocomplete="username"
+required>
+
+<input
+class="input"
+name="password"
+type="password"
+placeholder="Mot de passe"
+autocomplete="current-password"
+required>
+
+<button
+class="btn"
+type="submit"
+style="width:100%">
+Se connecter
+</button>
+
+</form>
+
+
+<p
+id="msg"
+style="margin-top:15px;font-weight:700">
+</p>
+
+
+<div style="text-align:center;margin-top:20px">
+<a href="/">← Retour au site</a>
+</div>
+
+</div>
+
+</main>
+
+
+<script>
+
+const $ = s => document.querySelector(s);
+
+
+/* CHANGER D'ESPACE */
+
+function show(x){
+
+  ['admin','teacher','student'].forEach(id => {
+
+    $('#' + id).classList.toggle(
+      'hidden',
+      id !== x
+    );
+
+  });
+
+  $('#msg').textContent = '';
+
+}
+
+
+/* CONNEXION */
+
+async function go(e,url){
+
+  e.preventDefault();
+
+  const msg = $('#msg');
+
+  msg.textContent = 'Connexion en cours...';
+
+  try {
+
+    const response = await fetch(url,{
+
+      method:'POST',
+
+      headers:{
+        'Content-Type':'application/json'
+      },
+
+      credentials:'same-origin',
+
+      body:JSON.stringify(
+        Object.fromEntries(
+          new FormData(e.target)
+        )
+      )
+
+    });
+
+
+    let data={};
+
+    try{
+
+      data=await response.json();
+
+    }catch(error){
+
+      data={
+        error:'Réponse invalide du serveur.'
+      };
+
+    }
+
+
+    if(response.ok){
+
+      msg.textContent='Connexion réussie...';
+
+      if(data.redirect){
+
+        window.location.href=data.redirect;
+
+      }else{
+
+        msg.textContent=
+          'Connexion réussie, mais aucune destination n’a été indiquée.';
+
+      }
+
+    }else{
+
+      msg.textContent=
+        data.error ||
+        'Identifiants incorrects.';
+
+    }
+
+  }catch(error){
+
+    console.error(error);
+
+    msg.textContent=
+      'Impossible de contacter le serveur.';
+
+  }
+
+}
+
+
+/*
+====================================================
+ROUTES QUI EXISTENT ACTUELLEMENT DANS SERVER.JS
+====================================================
+*/
+
+$('#admin').onsubmit=e=>
+  go(e,'/api/login');
+
+
+$('#teacher').onsubmit=e=>
+  go(e,'/api/teacher/login');
+
+
+$('#student').onsubmit=e=>
+  go(e,'/api/student/login');
+
+
+/* ADMIN PAR DEFAUT */
+
+show('admin');
+
+</script>
+
+</body>
+</html>
