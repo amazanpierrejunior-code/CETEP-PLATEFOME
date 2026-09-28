@@ -266,13 +266,13 @@ async function go(e, url){
 /* ROUTES CORRECTES DU SERVER.JS */
 
 $('#admin').onsubmit = e =>
-  go(e, '/api/login');
+  go(e, '/api/login/admin');
 
 $('#teacher').onsubmit = e =>
-  go(e, '/api/teacher/login');
+  go(e, '/api/login/teacher');
 
 $('#student').onsubmit = e =>
-  go(e, '/api/student/login');
+  go(e, '/api/login/student');
 
 
 /* ADMIN PAR DEFAUT */
