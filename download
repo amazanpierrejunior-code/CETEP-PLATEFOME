@@ -1,6 +1,7 @@
-node_modules/
-.env
+node_modules
+.git
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-.DS_Store
+.env
+CETEP_site_web_V5_deploiement.zip

@@ -1,13 +1,15 @@
-CETEP FINAL DEPLOY
+CETEP FINAL 11.1.0
 
-IMPORTANT: Upload the CONTENTS of this folder directly into the ROOT of the GitHub repository CETEP-PLATEFOME.
-Do NOT upload the CETEP-DEPLOY-FINAL folder itself and do NOT create CETEP-FINAL/CETEP-FINAL nesting.
-
-This version includes:
-- /admin appearance controls with logo upload (PNG/JPG/WebP, max 2 MB)
-- logo saved as a data URL in SQLite settings
-- logo reset button
-- editable school name/full name/slogan
-- editable dashboard colors
-- /app/data database path for Render persistent disk
-- render.yaml with 1 GB persistent disk configuration
+1. Upload the CONTENTS of this project to the ROOT of the GitHub repository CETEP-PLATEFOME.
+2. Keep Docker runtime on Render.
+3. Dockerfile path: ./Dockerfile
+4. Docker context: .
+5. Start command: leave the Dockerfile CMD unchanged.
+6. Required environment variables: ADMIN_EMAIL, ADMIN_PASSWORD, JWT_SECRET, DATA_DIR=/app/data.
+7. Test /health before opening /login.
+8. The server accepts both the new and legacy login API URLs:
+   /api/login and /api/login/admin
+   /api/teacher/login and /api/login/teacher
+   /api/student/login and /api/login/student
+9. Appearance settings, including logo and typography, are stored in SQLite settings.
+10. SQLite data persists across redeploys only when /app/data is mounted to a Render persistent disk.

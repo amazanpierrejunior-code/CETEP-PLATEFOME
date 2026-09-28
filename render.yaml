@@ -3,6 +3,8 @@ services:
     name: cetep-plateforme
     env: docker
     plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: ADMIN_EMAIL
@@ -16,4 +18,4 @@ services:
     disk:
       name: cetep-data
       mountPath: /app/data
-      sizeGB: 2
+      sizeGB: 1
