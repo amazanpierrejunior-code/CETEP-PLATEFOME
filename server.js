@@ -380,7 +380,18 @@ app.get('/student', (req, res) => {
    AUTHENTICATION
 ========================================================= */
 
-app.post('/api/login/admin', (req, res) => {
+/* =========================================================
+   AUTHENTICATION
+========================================================= */
+
+/*
+  ADMINISTRATION
+  Nou kenbe nouvo route la epi nou ajoute ansyen route la
+  kòm alias pou evite "Route API introuvable".
+*/
+
+function loginAdmin(req, res) {
+
   const email = clean(req.body.email).toLowerCase();
   const password = clean(req.body.password);
 
@@ -412,13 +423,27 @@ app.post('/api/login/admin', (req, res) => {
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
-  res.json({
+  return res.json({
     ok: true,
-    role: 'admin'
+    role: 'admin',
+    redirect: '/admin'
   });
-});
+}
 
-app.post('/api/login/teacher', (req, res) => {
+
+/* Nouvo route */
+app.post('/api/login/admin', loginAdmin);
+
+/* Ansyen route - compatibility */
+app.post('/api/login', loginAdmin);
+
+
+/*
+  PROFESSEUR
+*/
+
+function loginTeacher(req, res) {
+
   const email = clean(req.body.email).toLowerCase();
   const password = clean(req.body.password);
 
@@ -429,7 +454,10 @@ app.post('/api/login/teacher', (req, res) => {
   if (
     !teacher ||
     !teacher.active ||
-    !bcrypt.compareSync(password, teacher.password_hash)
+    !bcrypt.compareSync(
+      password,
+      teacher.password_hash
+    )
   ) {
     return jsonError(
       res,
@@ -451,14 +479,38 @@ app.post('/api/login/teacher', (req, res) => {
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
-  res.json({
+  return res.json({
     ok: true,
-    role: 'teacher'
+    role: 'teacher',
+    redirect: '/teacher'
   });
-});
+}
 
-app.post('/api/login/student', (req, res) => {
-  const studentNo = clean(req.body.student_no);
+
+/* Nouveau route */
+app.post('/api/login/teacher', loginTeacher);
+
+/* Ancien route - compatibility */
+app.post('/api/teacher/login', loginTeacher);
+
+
+/*
+  ETUDIANT
+*/
+
+function loginStudent(req, res) {
+
+  /*
+    login.html utilise "code".
+    Pour compatibilité, le serveur accepte également
+    "student_no".
+  */
+
+  const studentNo = clean(
+    req.body.code ||
+    req.body.student_no
+  ).toUpperCase();
+
   const password = clean(req.body.password);
 
   const student = db
@@ -469,12 +521,15 @@ app.post('/api/login/student', (req, res) => {
     !student ||
     !student.access_enabled ||
     !student.password_hash ||
-    !bcrypt.compareSync(password, student.password_hash)
+    !bcrypt.compareSync(
+      password,
+      student.password_hash
+    )
   ) {
     return jsonError(
       res,
       401,
-      'Identifiant ou mot de passe incorrect'
+      'Code étudiant ou mot de passe incorrect'
     );
   }
 
@@ -491,24 +546,48 @@ app.post('/api/login/student', (req, res) => {
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
-  res.json({
+  return res.json({
     ok: true,
-    role: 'student'
+    role: 'student',
+    redirect: '/student'
   });
-});
+}
+
+
+/* Nouveau route */
+app.post('/api/login/student', loginStudent);
+
+/* Ancien route - compatibility */
+app.post('/api/student/login', loginStudent);
+
+
+/*
+  LOGOUT
+*/
 
 app.post('/api/logout', (req, res) => {
+
   res.clearCookie('cetep_token');
-  res.json({ ok: true });
+
+  res.json({
+    ok: true
+  });
+
 });
 
+
+/*
+  SESSION
+*/
+
 app.get('/api/session', auth, (req, res) => {
+
   res.json({
     authenticated: true,
     user: req.user
   });
-});
 
+});
 /* =========================================================
    PUBLIC SETTINGS / PROGRAMS
 ========================================================= */
