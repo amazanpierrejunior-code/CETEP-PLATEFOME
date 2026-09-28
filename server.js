@@ -384,14 +384,7 @@ app.get('/student', (req, res) => {
    AUTHENTICATION
 ========================================================= */
 
-/*
-  ADMINISTRATION
-  Nou kenbe nouvo route la epi nou ajoute ansyen route la
-  kòm alias pou evite "Route API introuvable".
-*/
-
 function loginAdmin(req, res) {
-
   const email = clean(req.body.email).toLowerCase();
   const password = clean(req.body.password);
 
@@ -399,15 +392,8 @@ function loginAdmin(req, res) {
     .prepare('SELECT * FROM admins WHERE email=?')
     .get(email);
 
-  if (
-    !admin ||
-    !bcrypt.compareSync(password, admin.password_hash)
-  ) {
-    return jsonError(
-      res,
-      401,
-      'Email ou mot de passe incorrect'
-    );
+  if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
+    return jsonError(res, 401, 'Email ou mot de passe incorrect');
   }
 
   const token = makeToken({
@@ -423,27 +409,18 @@ function loginAdmin(req, res) {
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
-  return res.json({
+  res.json({
     ok: true,
     role: 'admin',
     redirect: '/admin'
   });
 }
 
-
-/* Nouvo route */
 app.post('/api/login/admin', loginAdmin);
-
-/* Ansyen route - compatibility */
 app.post('/api/login', loginAdmin);
 
 
-/*
-  PROFESSEUR
-*/
-
 function loginTeacher(req, res) {
-
   const email = clean(req.body.email).toLowerCase();
   const password = clean(req.body.password);
 
@@ -454,16 +431,9 @@ function loginTeacher(req, res) {
   if (
     !teacher ||
     !teacher.active ||
-    !bcrypt.compareSync(
-      password,
-      teacher.password_hash
-    )
+    !bcrypt.compareSync(password, teacher.password_hash)
   ) {
-    return jsonError(
-      res,
-      401,
-      'Email ou mot de passe incorrect'
-    );
+    return jsonError(res, 401, 'Email ou mot de passe incorrect');
   }
 
   const token = makeToken({
@@ -479,36 +449,20 @@ function loginTeacher(req, res) {
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
-  return res.json({
+  res.json({
     ok: true,
     role: 'teacher',
     redirect: '/teacher'
   });
 }
 
-
-/* Nouveau route */
 app.post('/api/login/teacher', loginTeacher);
-
-/* Ancien route - compatibility */
 app.post('/api/teacher/login', loginTeacher);
 
 
-/*
-  ETUDIANT
-*/
-
 function loginStudent(req, res) {
-
-  /*
-    login.html utilise "code".
-    Pour compatibilité, le serveur accepte également
-    "student_no".
-  */
-
   const studentNo = clean(
-    req.body.code ||
-    req.body.student_no
+    req.body.code || req.body.student_no
   ).toUpperCase();
 
   const password = clean(req.body.password);
@@ -521,10 +475,7 @@ function loginStudent(req, res) {
     !student ||
     !student.access_enabled ||
     !student.password_hash ||
-    !bcrypt.compareSync(
-      password,
-      student.password_hash
-    )
+    !bcrypt.compareSync(password, student.password_hash)
   ) {
     return jsonError(
       res,
@@ -546,47 +497,28 @@ function loginStudent(req, res) {
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
-  return res.json({
+  res.json({
     ok: true,
     role: 'student',
     redirect: '/student'
   });
 }
 
-
-/* Nouveau route */
 app.post('/api/login/student', loginStudent);
-
-/* Ancien route - compatibility */
 app.post('/api/student/login', loginStudent);
 
 
-/*
-  LOGOUT
-*/
-
 app.post('/api/logout', (req, res) => {
-
   res.clearCookie('cetep_token');
-
-  res.json({
-    ok: true
-  });
-
+  res.json({ ok: true });
 });
 
 
-/*
-  SESSION
-*/
-
 app.get('/api/session', auth, (req, res) => {
-
   res.json({
     authenticated: true,
     user: req.user
   });
-
 });
 /* =========================================================
    PUBLIC SETTINGS / PROGRAMS
