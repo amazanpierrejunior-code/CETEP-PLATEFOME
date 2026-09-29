@@ -24,3 +24,14 @@ Variables: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`, `DATA_DIR=/app/data`.
 
 ## Persistance Render
 Le mode SQLite conserve les données dans `DATA_DIR`. Pour conserver ces données entre redéploiements, utilisez un persistent disk Render (service payant) ou migrez vers une base de données managée. Render indique que le filesystem des services est éphémère par défaut.
+
+
+## CETEP 11.3.0 — Fonctions finales
+- Certificats de réussite PDF avec numéro unique.
+- Délivrance automatique après réussite + 100% des leçons publiées + paiement complet.
+- Vérification publique: `/certificat/CERT-AAAA-00001`.
+- Espace étudiant: téléchargement du certificat.
+- Résultats finaux avec seuil de réussite configurable.
+- Cours en ligne: vidéo, PDF, lien Zoom/Google Meet, date/heure et durée.
+- Progression des leçons conservée en base de données.
+- Sauvegarde/restauration inclut les résultats, certificats, présences et annonces.
