@@ -86,7 +86,30 @@ ensureColumn('students','certificate_name','TEXT');
 const defaults={school_name:'CETEP',school_full_name:"Centre d'Encadrement Technique et Professionnel",slogan:'Formation • Orientation • Insertion professionnelle',address:'Lamentin 54, Ruelle Crispin #856',phone:'',email:'',primary_color:'#0d2b52',secondary_color:'#1677b8',accent_color:'#087443',logo_text:'CETEP',logo_url:'',typography_font_family:'Arial,Helvetica,sans-serif',typography_font_size:'16px',typography_bold:'0',typography_italic:'0',typography_line_height:'1.5'};
 const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');for(const [k,v] of Object.entries(defaults))set.run(k,v);
 if(!db.prepare('SELECT 1 FROM admins LIMIT 1').get()){const e=process.env.ADMIN_EMAIL||'admin@cetep.ht',p=process.env.ADMIN_PASSWORD||'CHANGEZ_MOI';db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(e,bcrypt.hashSync(p,12));}
-if(db.prepare('SELECT COUNT(*) c FROM programs').get().c===0){const q=db.prepare('INSERT INTO programs(name,duration,description,price_htg) VALUES(?,?,?,?)');q.run('Secourisme de base','9 mois','Formation aux premiers secours et à la sécurité.',0);q.run('Aide-soignant(e)','6 mois','Formation orientée vers les soins de base.',0);q.run('Électricité bâtiment','6 mois','Installation et maintenance électrique.',0);q.run('Plomberie','6 mois','Installation et entretien des réseaux de plomberie.',0);q.run('Sérigraphie','6 mois','Techniques professionnelles de sérigraphie.',0);}
+// Catalogue de base CETEP : on conserve les formations existantes et on ajoute
+// les formations officielles visibles sur le flyer. Cette logique n'écrase jamais
+// une formation déjà enregistrée dans la base.
+const basePrograms=[
+  ['Secourisme de base','9 mois','Formation aux premiers secours et à la sécurité.'],
+  ['Aide-soignant(e)','9 mois','Formation orientée vers les soins de base.'],
+  ['Électricité bâtiment','6 mois','Installation et maintenance électrique.'],
+  ['Plomberie','6 mois','Installation et entretien des réseaux de plomberie.'],
+  ['Sérigraphie','3 mois','Techniques professionnelles de sérigraphie.'],
+  ['Secourisme et Aide-soignant','9 mois','Parcours regroupant le secourisme et les soins de base, selon le catalogue promotionnel CETEP.'],
+  ['Vidéographie et Photographie','4 mois','Formation pratique en vidéographie et photographie.'],
+  ['Anglais, Espagnol','9 mois','Formation en langues anglaise et espagnole.'],
+  ['Onglerie, Cosmétologie, Make-up','3 à 6 mois','Formation en beauté, onglerie, cosmétologie et maquillage.'],
+  ['Décoration événementielle, Résine','3 à 6 mois','Formation en décoration événementielle et techniques de résine.'],
+  ['Carrelage, Plomberie, Électricité','4 à 6 mois','Parcours pratique dans les métiers du bâtiment.'],
+  ['Informatique bureautique','6 mois','Formation en informatique et outils bureautiques.'],
+  ['Dread Locks','2 mois','Formation pratique en dread locks et coiffure spécialisée.']
+];
+const insertProgram=db.prepare('INSERT INTO programs(name,duration,description,price_htg) VALUES(?,?,?,?)');
+for(const [name,duration,description] of basePrograms){
+  if(!db.prepare('SELECT 1 FROM programs WHERE name=? LIMIT 1').get(name)){
+    insertProgram.run(name,duration,description,0);
+  }
+}
 if(db.prepare('SELECT COUNT(*) c FROM support_methods').get().c===0){const q=db.prepare('INSERT INTO support_methods(name,account_name,account_value,instructions,sort_order) VALUES(?,?,?,?,?)');q.run('MonCash','','','Contactez CETEP pour les instructions.',1);q.run('Natcash','','','Contactez CETEP pour les instructions.',2);q.run('Zelle','','','Contactez CETEP pour les instructions.',3);q.run('Cash App','','','Contactez CETEP pour les instructions.',4);q.run('Compte bancaire','','','Compte bancaire / RIB à renseigner',5);}
 function settings(){return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));}
 function sign(p){return jwt.sign(p,SECRET,{expiresIn:'12h'});}function auth(req,res,next){try{const t=req.cookies.cetep_token;if(!t)throw 0;req.user=jwt.verify(t,SECRET);next();}catch{res.status(401).json({error:'Non autorisé'});}}
@@ -128,9 +151,9 @@ function autoCertificateForStudent(studentId){
   return null;
 }
 
-app.get('/health',(req,res)=>res.json({ok:true,service:'CETEP',version:'11.6.0',storage:DATA_DIR}));
+app.get('/health',(req,res)=>res.json({ok:true,service:'CETEP',version:'11.9.0',storage:DATA_DIR}));
 function sendPage(res,file){const pub=path.join(__dirname,'public',file);const root=path.join(__dirname,file);if(fs.existsSync(pub))return res.sendFile(pub);if(fs.existsSync(root))return res.sendFile(root);return res.status(404).send('Page introuvable: '+file);}
-app.get('/',(req,res)=>sendPage(res,'index.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
+app.get('/',(req,res)=>sendPage(res,'index.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
 function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
 app.post('/api/login',adminLogin);app.post('/api/login/admin',adminLogin);
 function teacherLogin(req,res){const t=db.prepare('SELECT * FROM teachers WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!t||!t.active||!bcrypt.compareSync(req.body.password||'',t.password_hash))return res.status(401).json({error:'Identifiants professeur invalides'});res.cookie('cetep_token',sign({id:t.id,teacher_no:t.teacher_no,role:'teacher'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/teacher'});}
@@ -155,7 +178,46 @@ app.get('/api/admin/payments',auth,role('admin'),(req,res)=>res.json(db.prepare(
 app.get('/api/admin/support',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM support_methods ORDER BY sort_order,id').all()));app.post('/api/admin/support',auth,role('admin'),(req,res)=>{const b=req.body;if(!b.name)return res.status(400).json({error:'Nom obligatoire'});const r=db.prepare('INSERT INTO support_methods(name,account_name,account_value,bank_name,bank_account,routing,instructions,active,sort_order) VALUES(?,?,?,?,?,?,?,?,?)').run(b.name,b.account_name||'',b.account_value||'',b.bank_name||'',b.bank_account||'',b.routing||'',b.instructions||'',b.active===false?0:1,Number(b.sort_order||99));res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/support/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE support_methods SET name=?,account_name=?,account_value=?,bank_name=?,bank_account=?,routing=?,instructions=?,active=?,sort_order=? WHERE id=?').run(b.name,b.account_name||'',b.account_value||'',b.bank_name||'',b.bank_account||'',b.routing||'',b.instructions||'',b.active===false?0:1,Number(b.sort_order||99),req.params.id);res.json({ok:true});});app.delete('/api/admin/support/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM support_methods WHERE id=?').run(req.params.id);res.json({ok:true});});
 app.get('/api/admin/donations',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM donations ORDER BY id DESC').all()));app.post('/api/admin/donations/:id/status',auth,role('admin'),(req,res)=>{db.prepare('UPDATE donations SET status=? WHERE id=?').run(req.body.status||'Confirmé',req.params.id);res.json({ok:true});});
 app.get('/api/admin/gallery',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM gallery ORDER BY sort_order,id DESC').all()));app.post('/api/admin/gallery',auth,role('admin'),(req,res)=>{const b=req.body;if(!b.title||!b.image_url)return res.status(400).json({error:'Titre et photo obligatoires'});if(String(b.image_url).length>7000000)return res.status(400).json({error:'Photo trop grande. Maximum recommandé: 5 Mo.'});const r=db.prepare('INSERT INTO gallery(title,description,image_url,sort_order,active) VALUES(?,?,?,?,?)').run(b.title,b.description||'',b.image_url,Number(b.sort_order||99),b.active===false?0:1);res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE gallery SET title=?,description=?,image_url=?,sort_order=?,active=? WHERE id=?').run(b.title,b.description||'',b.image_url,b.sort_order||99,b.active===false?0:1,req.params.id);res.json({ok:true});});app.delete('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM gallery WHERE id=?').run(req.params.id);res.json({ok:true});});
-app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const out={version:'11.6.0',created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v11.json"');res.send(JSON.stringify(out,null,2));});
+// CETEP Local ↔ Online synchronization: local mode never deletes online records.
+app.post('/api/admin/local-sync',auth,role('admin'),(req,res)=>{
+  try{
+    const payload=req.body||{};
+    const tx=db.transaction(()=>{
+      const programMap=new Map(db.prepare('SELECT id,name FROM programs').all().map(x=>[x.name,x.id]));
+      for(const x of (payload.programs||[])){
+        if(!x.name) continue;
+        if(!programMap.has(x.name)){
+          const r=db.prepare('INSERT INTO programs(name,duration,description,price_htg,active) VALUES(?,?,?,?,?)').run(x.name,x.duration||'',x.description||'',Number(x.price_htg||0),x.active===false?0:1);
+          programMap.set(x.name,Number(r.lastInsertRowid));
+        }
+      }
+      const studentMap=new Map(db.prepare('SELECT id,student_no FROM students').all().map(x=>[x.student_no,x.id]));
+      for(const x of (payload.students||[])){
+        if(!x.student_no||!x.name) continue;
+        const programId=x.program_name?programMap.get(x.program_name):Number(x.program_id||0)||null;
+        if(!studentMap.has(x.student_no)){
+          const r=db.prepare(`INSERT INTO students(student_no,name,birth_date,birth_place,phone,email,program_id,education,blood_group,responsible_person,marital_status,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(x.student_no,x.name,x.birth_date||'',x.birth_place||'',x.phone||'',x.email||'',programId,x.education||'',x.blood_group||'',x.responsible_person||'',x.marital_status||'',x.status||'En attente');
+          studentMap.set(x.student_no,Number(r.lastInsertRowid));
+        }
+      }
+      for(const x of (payload.payments||[])){
+        const sid=x.student_no?studentMap.get(x.student_no):Number(x.student_id||0);
+        if(!sid||!Number(x.amount_htg)) continue;
+        const ref=x.reference||`LOCAL-${x.local_id||Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+        db.prepare('INSERT OR IGNORE INTO payments(student_id,amount_htg,method,status,reference) VALUES(?,?,?,?,?)').run(sid,Number(x.amount_htg),x.method||'Local','Confirmé',ref);
+      }
+      for(const x of (payload.attendance||[])){
+        const sid=x.student_no?studentMap.get(x.student_no):Number(x.student_id||0), pid=x.program_name?programMap.get(x.program_name):Number(x.program_id||0);
+        if(!sid||!pid||!x.class_date) continue;
+        db.prepare(`INSERT INTO attendance(student_id,program_id,class_date,present,note) VALUES(?,?,?,?,?) ON CONFLICT(student_id,program_id,class_date) DO UPDATE SET present=excluded.present,note=excluded.note`).run(sid,pid,x.class_date,x.present?1:0,x.note||'');
+      }
+    });
+    tx();
+    res.json({ok:true,message:'Synchronisation terminée sans suppression de données.',synced:{programs:(payload.programs||[]).length,students:(payload.students||[]).length,payments:(payload.payments||[]).length,attendance:(payload.attendance||[]).length}});
+  }catch(e){res.status(400).json({error:e.message});}
+});
+
+app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const out={version:'11.9.0',created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v11.json"');res.send(JSON.stringify(out,null,2));});
 app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
 
 // Certificates & academic results
@@ -259,4 +321,4 @@ app.get('/api/student/me',auth,role('student'),(req,res)=>res.json(db.prepare('S
 app.get('/api/student/content',auth,role('student'),(req,res)=>{const s=db.prepare('SELECT * FROM students WHERE id=?').get(req.user.id);const rows=db.prepare(`SELECT m.id module_id,m.title module_title,m.description,l.id lesson_id,l.title lesson_title,l.type,l.content,l.video_url,l.file_url,l.order_no,COALESCE(lp.completed,0) completed FROM modules m JOIN lessons l ON l.module_id=m.id LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.student_id=? WHERE m.program_id=? AND m.active=1 AND l.active=1 ORDER BY m.order_no,l.order_no`).all(s.id,s.program_id);res.json(rows);});app.post('/api/student/progress',auth,role('student'),(req,res)=>{db.prepare(`INSERT INTO lesson_progress(student_id,lesson_id,completed,completed_at) VALUES(?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(student_id,lesson_id) DO UPDATE SET completed=1,completed_at=CURRENT_TIMESTAMP`).run(req.user.id,Number(req.body.lesson_id));res.json({ok:true});});
 app.use((req,res)=>{if(req.path.startsWith('/api/'))return res.status(404).json({error:'Route API introuvable',path:req.path});res.status(404).send('Page introuvable');});
 app.use((err,req,res,next)=>{console.error('CETEP ERROR',err);if(res.headersSent)return next(err);res.status(500).json({error:'Erreur interne du serveur'});});
-app.listen(PORT,'0.0.0.0',()=>console.log(`CETEP v11.1 running on ${PORT}`));
+app.listen(PORT,'0.0.0.0',()=>console.log(`CETEP v11.9.0 running on ${PORT}`));
