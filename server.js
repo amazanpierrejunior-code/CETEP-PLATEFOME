@@ -110,6 +110,16 @@ for(const [name,duration,description] of basePrograms){
     insertProgram.run(name,duration,description,0);
   }
 }
+// Promotions CETEP par défaut : elles sont ajoutées automatiquement sans supprimer
+// les publications déjà présentes. L'administrateur peut ensuite les modifier ou les supprimer.
+const defaultPromotions=[
+  ['🎉 Spécial 7e anniversaire CETEP','Découvrez les formations et profitez de la promotion CETEP.','/promotions/promo-1.jpg',1],
+  ['📚 Nouvelle session chaque mois','Sérigraphie, secourisme, langues, beauté, bâtiment, informatique et autres formations professionnelles.','/promotions/promo-2.jpg',2]
+];
+const insertGallery=db.prepare('INSERT INTO gallery(title,description,image_url,sort_order,active) VALUES(?,?,?,?,1)');
+for(const [title,description,image_url,sort_order] of defaultPromotions){
+  if(!db.prepare('SELECT 1 FROM gallery WHERE title=? LIMIT 1').get(title)) insertGallery.run(title,description,image_url,sort_order);
+}
 if(db.prepare('SELECT COUNT(*) c FROM support_methods').get().c===0){const q=db.prepare('INSERT INTO support_methods(name,account_name,account_value,instructions,sort_order) VALUES(?,?,?,?,?)');q.run('MonCash','','','Contactez CETEP pour les instructions.',1);q.run('Natcash','','','Contactez CETEP pour les instructions.',2);q.run('Zelle','','','Contactez CETEP pour les instructions.',3);q.run('Cash App','','','Contactez CETEP pour les instructions.',4);q.run('Compte bancaire','','','Compte bancaire / RIB à renseigner',5);}
 function settings(){return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));}
 function sign(p){return jwt.sign(p,SECRET,{expiresIn:'12h'});}function auth(req,res,next){try{const t=req.cookies.cetep_token;if(!t)throw 0;req.user=jwt.verify(t,SECRET);next();}catch{res.status(401).json({error:'Non autorisé'});}}
