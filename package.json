@@ -1,6 +1,6 @@
 {
   "name": "cetep-plateforme",
-  "version": "12.4.0",
+  "version": "12.5.0",
   "private": true,
   "scripts": {
     "start": "node server.js"
