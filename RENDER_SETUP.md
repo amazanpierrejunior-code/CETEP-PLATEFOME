@@ -17,3 +17,21 @@
 
 ## Important — données
 Le projet utilise SQLite. Sans stockage persistant monté sur `DATA_DIR`, les données locales peuvent être perdues lors d'un redeploy/restart du service. Pour une utilisation réelle avec des données importantes, utiliser un stockage persistant ou migrer vers PostgreSQL.
+
+
+## Notifications email CETEP
+Pour recevoir automatiquement un email à `cetepecoleprofessionnelle@gmail.com` lorsqu’une inscription en ligne ou un paiement est envoyé, configurez ces variables d’environnement dans Render :
+
+- `CETEP_NOTIFICATION_EMAIL` = `cetepecoleprofessionnelle@gmail.com`
+- `SMTP_HOST` = `smtp.gmail.com`
+- `SMTP_PORT` = `465`
+- `SMTP_SECURE` = `true`
+- `SMTP_USER` = `cetepecoleprofessionnelle@gmail.com`
+- `SMTP_FROM` = `cetepecoleprofessionnelle@gmail.com`
+- `SMTP_PASS` = **mot de passe d’application Gmail** du compte CETEP (pas le mot de passe normal).
+
+Sans `SMTP_PASS`, le site continue à accepter les inscriptions/paiements, mais l’email ne sera pas envoyé.
+
+
+### Email de confirmation
+Quand une inscription est validée/activée, CETEP envoie une confirmation à l’adresse email de l’étudiant. SMTP_PASS doit être configuré.

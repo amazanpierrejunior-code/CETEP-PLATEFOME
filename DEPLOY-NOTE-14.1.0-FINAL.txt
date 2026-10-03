@@ -1,0 +1,9 @@
+CETEP 14.1.0 — CERTIFICAT OFFICIEL FINAL
+
+1. Le modèle officiel est public/certificat-cetep-officiel-2026-final-v3.png.
+2. Le générateur PDF utilise ce modèle comme fond exact.
+3. Le bouton étudiant utilise ?v=14.1.0 et le service worker est versionné v14-1.
+4. /api/version doit retourner version=14.1.0 et certificate_model_version=14.1.0-official-final.
+5. /certificat-modele-2026.png permet de vérifier directement le fichier modèle servi par Render.
+6. Le PDF généré envoie X-CETEP-Certificate-Model: 14.1.0-official-final et des headers no-cache.
+7. Après déploiement, tester /api/version puis /certificat-modele-2026.png avant de tester un certificat étudiant.
