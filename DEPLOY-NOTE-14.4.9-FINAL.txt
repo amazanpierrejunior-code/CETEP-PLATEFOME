@@ -1,0 +1,6 @@
+CETEP 14.4.9 FINAL
+- Certificate template cleaned: no embedded DG/Wilio signature backgrounds.
+- Real DG and Wilio signatures are transparent PNG overlays.
+- Dynamic student name and formation remain directly on dotted lines.
+- QR and certificate number remain generated dynamically.
+- Homepage/local and existing platform features are preserved.

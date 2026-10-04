@@ -1,6 +1,6 @@
 {
   "name": "cetep-plateforme",
-  "version": "14.4.2",
+  "version": "14.4.8",
   "private": true,
   "scripts": {
     "start": "node server.js"
@@ -13,6 +13,7 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "pdfkit": "^0.17.2",
+    "qrcode": "^1.5.4",
     "nodemailer": "^7.0.6"
   }
 }
