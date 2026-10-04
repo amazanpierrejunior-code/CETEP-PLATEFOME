@@ -1,0 +1,7 @@
+CETEP 14.4.0 — certificat officiel avec photo du local CETEP
+
+- Nouveau fond du certificat: photo réelle du local CETEP fournie par la direction.
+- Les champs étudiant et formation sont positionnés sur les lignes pointillées.
+- Le modèle conserve le logo, le sceau et les signatures institutionnelles du certificat.
+- Le modèle est servi sans cache.
+- La logique d'accès/certificat existante est conservée.
