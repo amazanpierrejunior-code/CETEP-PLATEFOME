@@ -1,0 +1,6 @@
+CETEP 14.4.1 - certificat final propre
+
+- Nouveau local CETEP en arrière-plan.
+- Nom et formation imprimés directement sur les lignes pointillées, sans rectangles blancs.
+- Footer approuvé avec signature DG, signature Directeur des Études, sceau et QR code.
+- Conservation des fonctions de la version 14.4.0.
