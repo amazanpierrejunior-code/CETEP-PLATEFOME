@@ -1,0 +1,6 @@
+CETEP 14.4.5 FINAL
+- Nouvel local CETEP conserve comme background principal.
+- Inscription: lieu de naissance, niveau d'etudes et groupe sanguin en menus de selection.
+- Etat matrimonial deja en menu.
+- Header du modele certificat mis a jour en 14.4.5.
+- Fonctions email, paiement, soutien, CETEP Local et synchronisation conservees.
