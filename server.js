@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express=require('express');const PDFDocument=require('pdfkit');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.1.0';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.3.0';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 app.use(express.json({limit:'20mb'}));app.use(express.urlencoded({extended:true,limit:'20mb'}));app.use(cookieParser());app.use(express.static(path.join(__dirname,'public'),{etag:true}));
 // Static promotion assets live in /promotions at the project root. Serve them explicitly.
 app.use('/promotions',express.static(path.join(__dirname,'promotions'),{etag:true,maxAge:'1h'}));
@@ -275,7 +275,7 @@ async function sendStudentConfirmation(student, programName){
 
 app.get('/health',(req,res)=>res.json({ok:true,service:'CETEP',version:APP_VERSION,storage:DATA_DIR}));
 function sendPage(res,file){const pub=path.join(__dirname,'public',file);const root=path.join(__dirname,file);if(fs.existsSync(pub))return res.sendFile(pub);if(fs.existsSync(root))return res.sendFile(root);return res.status(404).send('Page introuvable: '+file);}
-app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-officiel-2026-final-v3.png',certificate_model_version:'14.1.0-official-final',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-officiel-2026-final-v3.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.1.0-official-final'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
+app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-officiel-2026-final-v3.png',certificate_model_version:'14.3.0-official-final',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-officiel-2026-final-v3.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.3.0-official-final'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
 function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
 app.post('/api/login',adminLogin);app.post('/api/login/admin',adminLogin);
 function teacherLogin(req,res){const t=db.prepare('SELECT * FROM teachers WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!t||!t.active||!bcrypt.compareSync(req.body.password||'',t.password_hash))return res.status(401).json({error:'Identifiants professeur invalides'});res.cookie('cetep_token',sign({id:t.id,teacher_no:t.teacher_no,role:'teacher'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/teacher'});}
@@ -341,7 +341,7 @@ app.post('/api/admin/local-sync',auth,role('admin'),(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v14.0.0.json"');res.send(JSON.stringify(out,null,2));});
+app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v14.3.0.json"');res.send(JSON.stringify(out,null,2));});
 app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
 
 // Certificates & academic results
@@ -418,39 +418,34 @@ function sendCertificatePdf(req,res,certificateId,isAdmin){
   res.setHeader('Content-Type','application/pdf');
   res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
   doc.pipe(res);
-  res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-CETEP-Certificate-Model','14.1.0-official-final');const model=path.join(__dirname,'public','certificat-cetep-officiel-2026-final-v3.png');
+  res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-CETEP-Certificate-Model','14.3.0-official-final');const model=path.join(__dirname,'public','certificat-cetep-officiel-2026-final-v3.png');
   if(fs.existsSync(model)) doc.image(model,0,0,{width:W,height:H});
 
   const debut=c.enrolled_at ? new Date(c.enrolled_at).toLocaleDateString('fr-FR') : '—';
   const fin=c.issued_at ? new Date(c.issued_at).toLocaleDateString('fr-FR') : '—';
   const formation=c.program_name||'Formation professionnelle';
 
-  // Le modèle officiel est déjà composé avec les textes CETEP. Nous remplaçons uniquement
-  // les zones pointillées par les données variables, en conservant le décor et la typographie.
-  const paper='#fbf8ea';
-  // Nom de l'étudiant — ligne située sous « Décerné à : »
-  doc.save().rect(82,332,678,34).fill(paper).restore();
-  doc.fillColor('#111').font('Helvetica-Bold').fontSize(22)
-     .text(c.certificate_name||c.student_name,90,336,{width:662,align:'center'});
-
+  // Le nouveau modèle officiel 14.3.0 contient le décor, le logo, le sceau,
+  // les deux signatures et les libellés institutionnels. On recouvre uniquement
+  // les champs variables afin de les rendre dynamiques pour chaque étudiant.
+  const paper='#fbfaf2';
+  // Nom de l’étudiant
+  doc.save().rect(225,268,590,48).fill(paper).restore();
+  doc.fillColor('#102a58').font('Times-BoldItalic').fontSize(24)
+     .text(c.certificate_name||c.student_name,235,274,{width:570,align:'center'});
   // Formation
-  doc.save().rect(470,360,230,25).fill(paper).restore();
-  doc.fillColor('#171717').font('Times-Italic').fontSize(13)
-     .text(formation,474,362,{width:222,align:'center'});
-
-  // Dates de formation
-  doc.save().rect(195,403,180,23).fill(paper).restore();
-  doc.font('Times-Italic').fontSize(13).text(debut,198,404,{width:174,align:'center'});
-  doc.save().rect(408,403,180,23).fill(paper).restore();
-  doc.font('Times-Italic').fontSize(13).text(fin,411,404,{width:174,align:'center'});
-
-  // Date de délivrance
-  doc.save().rect(607,488,172,24).fill(paper).restore();
-  doc.font('Times-Italic').fontSize(13).text(fin,610,489,{width:166,align:'center'});
-
-  // Numéro unique discret, en bas à droite.
-  doc.fillColor('#333').font('Helvetica-Bold').fontSize(8)
-     .text(`N° ${c.certificate_no}`,650,596,{width:125,align:'right'});
+  doc.save().rect(250,353,560,42).fill(paper).restore();
+  doc.fillColor('#102a58').font('Helvetica-Bold').fontSize(18)
+     .text(formation,260,364,{width:540,align:'center'});
+  // Date de délivrance / date de formation
+  const issued=fin;
+  doc.save().rect(430,455,360,28).fill(paper).restore();
+  doc.fillColor('#172033').font('Times-Italic').fontSize(13)
+     .text(issued,440,461,{width:340,align:'center'});
+  // Numéro unique
+  doc.save().rect(690,515,140,20).fill(paper).restore();
+  doc.fillColor('#222').font('Helvetica-Bold').fontSize(8)
+     .text(`N° ${c.certificate_no}`,695,520,{width:130,align:'right'});
   doc.end();
 }
 

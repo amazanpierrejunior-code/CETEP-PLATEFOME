@@ -1,0 +1,12 @@
+CETEP 14.2.0 — VERSION FINALE DE DEPLOIEMENT
+
+1. Version serveur: 14.2.0.
+2. Modèle officiel du certificat: public/certificat-cetep-officiel-2026-final-v3.png.
+3. Route de contrôle: /api/version.
+4. Route de contrôle du modèle: /certificat-modele-2026.png.
+5. Le PDF du certificat utilise le modèle officiel comme fond et ajoute uniquement les données variables de l'étudiant.
+6. Les headers de certificat désactivent le cache navigateur/proxy.
+7. Les photos Promotion Juillet 2026 sont servies depuis /promotions/.
+8. Le service worker utilise le cache cetep-local-v14-2.
+9. Tous les fichiers du projet sont inclus dans ce ZIP avec public/ et promotions/ à la racine.
+10. Sur Render, utiliser le service existant connecté à GitHub main; ne pas créer un nouveau Web Service.

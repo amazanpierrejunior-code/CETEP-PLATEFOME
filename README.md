@@ -1,4 +1,4 @@
-# CETEP Plateforme v14.1.0 FINAL
+# CETEP Plateforme v14.2.0 FINAL
 
 Plateforme de gestion et formation en ligne pour le Centre d'Encadrement Technique et Professionnel.
 
@@ -41,7 +41,7 @@ Le mode SQLite conserve les données dans `DATA_DIR`. Pour conserver ces donnée
 Les formations déjà présentes sont conservées. Le démarrage ajoute uniquement les formations manquantes du flyer du 7e anniversaire si elles n'existent pas déjà : Sérigraphie (3 mois), Secourisme et Aide-soignant (9 mois), Vidéographie et Photographie (4 mois), Anglais/ Espagnol (9 mois), Onglerie/Cosmétologie/Make-up (3 à 6 mois), Décoration événementielle/Résine (3 à 6 mois), Carrelage/Plomberie/Électricité (4 à 6 mois), Informatique bureautique (6 mois), Dread Locks (2 mois). Aucun enregistrement existant n'est supprimé ou remplacé.
 
 
-## Version 14.1.0
+## Version 14.2.0
 - Paiement en ligne avec confirmation par message ou photo/capture de transaction.
 - Administration: aperçu de la preuve de paiement.
 - Page publique /informations pour les informations CETEP, inscription et paiement.
@@ -49,7 +49,7 @@ Les formations déjà présentes sont conservées. Le démarrage ajoute uniqueme
 - Certificat automatique basé sur le modèle CETEP fourni, avec nom, formation, période et date générés automatiquement après réussite, progression complète et paiement confirmé.
 
 
-## CETEP 14.1.0 — Finalisation globale
+## CETEP 14.2.0 — Finalisation globale
 - Correction du service des images du dossier `promotions/` sur Render.
 - Promotion Juillet 2026 mise en avant avec sa couverture officielle.
 - Anciennes publications 7e anniversaire / nouvelle session conservées en base mais masquées de l’accueil.
