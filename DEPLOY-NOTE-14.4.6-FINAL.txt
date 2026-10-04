@@ -1,0 +1,10 @@
+CETEP 14.4.6 FINAL
+
+Correction admin.html: le formulaire « Ajouter un étudiant » utilise désormais les mêmes menus de sélection que l'inscription en ligne pour :
+- Lieu de naissance
+- Niveau d'études
+- Groupe sanguin
+- État matrimonial
+
+Le champ Responsable reste libre pour saisir le nom et les coordonnées de la personne responsable.
+Le reste de la plateforme 14.4.5 est conservé.
