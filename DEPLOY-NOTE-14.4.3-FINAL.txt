@@ -1,0 +1,3 @@
+CETEP 14.4.3 FINAL
+
+Inscription fields with selectable dropdowns: lieu de naissance, niveau d’études, groupe sanguin, état matrimonial. Existing field names preserved for backend compatibility.

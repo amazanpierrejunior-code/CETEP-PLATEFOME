@@ -1,0 +1,11 @@
+CETEP 14.4.2 FINAL
+
+1. Nouvo lokal CETEP la itilize sou paj akèy la: public/local-cetep.jpg.
+2. Certificate: code no longer paints white rectangles behind student name/training; dynamic fields are placed directly on dotted lines.
+3. Certificate model endpoint and PDF generation use the 14.4.2 clean template asset.
+4. Online admission saves the full student profile, including blood group, responsible person and marital status.
+5. New admission sends all submitted profile data to CETEP_NOTIFICATION_EMAIL through SMTP.
+6. Online support/donation saves the contribution and sends the submitted donor/support details to CETEP by email through SMTP.
+7. CETEP Local supports local offline records and a full Online snapshot saved in the browser; synchronization is bidirectional.
+8. Backup endpoint version updated to CETEP 14.4.2.
+9. Render setup includes SMTP variables and DATA_DIR. IMPORTANT: SQLite is persistent on Render only when DATA_DIR is mounted on persistent storage; Free services without persistent storage still need the local/external backup or a persistent database.

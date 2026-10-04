@@ -16,7 +16,7 @@
 - `DATA_DIR` : chemin vers un stockage persistant si le service Render dispose d'un Persistent Disk
 
 ## Important — données
-Le projet utilise SQLite. Sans stockage persistant monté sur `DATA_DIR`, les données locales peuvent être perdues lors d'un redeploy/restart du service. Pour une utilisation réelle avec des données importantes, utiliser un stockage persistant ou migrer vers PostgreSQL.
+Le projet utilise SQLite. Le mode CETEP Local garde une copie locale des données et la synchronisation complète peut recopier les données Online vers l'ordinateur. Côté Render, SQLite n'est persistant que si `DATA_DIR` est monté sur un Persistent Disk; sur un Web Service Free sans disque persistant, une copie externe ou PostgreSQL reste nécessaire.
 
 
 ## Notifications email CETEP
