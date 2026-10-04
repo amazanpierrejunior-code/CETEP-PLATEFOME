@@ -1,0 +1,5 @@
+CETEP 14.4.4 FINAL
+- New official CETEP local photo is the homepage hero background.
+- Promotion Juillet 2026 remains in its own promotion/gallery section.
+- Certificate remains the clean no-white-box model.
+- Online/Local and registration features from 14.4.3 retained.
