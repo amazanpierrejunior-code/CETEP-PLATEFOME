@@ -420,38 +420,137 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   if(!isAdmin && c.student_id!==req.user.id)return res.status(403).send('Accès interdit');
 
   // Modèle officiel CETEP fourni par la direction — utilisé comme fond exact du certificat.
-  const W=842,H=632;
-  const doc=new PDFDocument({size:[W,H],margin:0});
-  res.setHeader('Content-Type','application/pdf');
-  res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
-  doc.pipe(res);
-  res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');res.setHeader('X-CETEP-Certificate-Model','14.4.9-exact-template');const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
-  if(fs.existsSync(model)) doc.image(model,0,0,{width:W,height:H});
-  // Real CETEP signatures are transparent PNGs; the template itself contains no embedded signatures/backgrounds.
-  const sigDG=path.join(__dirname,'public','signature-dg-livenson-fleuriot.png');
-  const sigWJ=path.join(__dirname,'public','signature-wilio-joseph.png');
-  if(fs.existsSync(sigDG)) doc.image(sigDG,174,468,{width:145,height:65,fit:[145,65],align:'center',valign:'center'});
-  if(fs.existsSync(sigWJ)) doc.image(sigWJ,505,477,{width:150,height:55,fit:[150,55],align:'center',valign:'center'});
+  const W=842,H=605;
 
-  // Dynamic fields are placed directly on the official dotted lines. No white boxes or duplicated text.
-  const name=(c.certificate_name||c.student_name||'').trim();
-  const formation=(c.program_name||'Formation professionnelle').trim();
-  const fin=c.issued_at ? new Date(c.issued_at).toLocaleDateString('fr-FR') : '—';
-  doc.fillColor('#1b1f3a').font('Helvetica-Bold').fontSize(17)
-     .text(name,145,338,{width:560,align:'center',lineBreak:false});
-  doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(13)
-     .text(formation,145,398,{width:560,align:'center',lineBreak:false});
-  doc.fillColor('#111').font('Times-Roman').fontSize(12)
-     .text(fin,445,458,{width:160,align:'center',lineBreak:false});
+const doc=new PDFDocument({size:[W,H],margin:0});
 
-  // Generate a fresh QR for this certificate so the number and verification URL always match.
-  const verifyUrl=`${process.env.PUBLIC_BASE_URL||''}/certificat/${encodeURIComponent(c.certificate_no)}`;
-  const qrData=await QRCode.toDataURL(verifyUrl,{margin:0,width:110,color:{dark:'#111111',light:'#ffffff'}});
-  const qrBuf=Buffer.from(qrData.split(',')[1],'base64');
-  doc.image(qrBuf,690,548,{width:72,height:72});
-  doc.fillColor('#333').font('Helvetica-Bold').fontSize(8)
-     .text(`N° ${c.certificate_no}`,650,532,{width:125,align:'right',lineBreak:false});
-  doc.end();
+res.setHeader('Content-Type','application/pdf');
+res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
+
+doc.pipe(res);
+
+res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
+res.setHeader('Pragma','no-cache');
+res.setHeader('Expires','0');
+res.setHeader('X-CETEP-Certificate-Model','14.4.12');
+
+const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
+
+if(fs.existsSync(model)){
+  doc.image(model,0,0,{width:W,height:H});
+}
+
+/* =========================================================
+   SIGNATURES OFFICIELLES CETEP
+   ========================================================= */
+
+const sigDG=path.join(__dirname,'public','signature-dg-livenson-fleuriot.png');
+const sigWJ=path.join(__dirname,'public','signature-wilio-joseph.png');
+
+/* Signature DG — ligne gauche */
+if(fs.existsSync(sigDG)){
+ doc.image(sigDG,175,490,{
+    width:135,
+    height:60,
+    fit:[135,60],
+    align:'center',
+    valign:'center'
+  });
+}
+
+/* Signature Directeur des Études — ligne droite */
+if(fs.existsSync(sigWJ)){
+  doc.image(sigWJ,490,490,{
+    width:145,
+    height:58,
+    fit:[145,58],
+    align:'center',
+    valign:'center'
+  });
+}
+
+/* =========================================================
+   INFORMATIONS DYNAMIQUES
+   ========================================================= */
+
+const name=(c.certificate_name||c.student_name||'').trim();
+const formation=(c.program_name||'Formation professionnelle').trim();
+
+const fin=c.issued_at
+  ? new Date(c.issued_at).toLocaleDateString('fr-FR')
+  : '—';
+
+/* Nom de l'étudiant — centré sur la première ligne */
+doc.fillColor('#1b1f3a')
+   .font('Helvetica-Bold')
+   .fontSize(17)
+   .text(name,145,321,{
+      width:560,
+      align:'center',
+      lineBreak:false
+   });
+
+/* Formation — centrée sur la deuxième ligne */
+doc.fillColor('#1b1f3a')
+   .font('Times-Roman')
+   .fontSize(13)
+   .text(formation,145,380,{
+      width:560,
+      align:'center',
+      lineBreak:false
+   });
+
+/* Date */
+doc.fillColor('#111')
+   .font('Times-Roman')
+   .fontSize(12)
+   .text(fin,410,448,{
+      width:170,
+      align:'center',
+      lineBreak:false
+   });
+
+/* =========================================================
+   QR CODE — EN HAUT À DROITE
+   ========================================================= */
+
+const verifyUrl=
+  `${process.env.PUBLIC_BASE_URL||''}/certificat/${encodeURIComponent(c.certificate_no)}`;
+
+const qrData=await QRCode.toDataURL(
+  verifyUrl,
+  {
+    margin:0,
+    width:120,
+    color:{
+      dark:'#111111',
+      light:'#ffffff'
+    }
+  }
+);
+
+const qrBuf=Buffer.from(
+  qrData.split(',')[1],
+  'base64'
+);
+
+/* QR ne couvre ni le sceau ni les signatures */
+doc.image(qrBuf,715,28,{
+  width:72,
+  height:72
+});
+
+/* Numéro du certificat sous le QR */
+doc.fillColor('#1b1f3a')
+   .font('Helvetica-Bold')
+   .fontSize(8)
+   .text(`N° ${c.certificate_no}`,690,103,{
+      width:120,
+      align:'center',
+      lineBreak:false
+   });
+
+doc.end();
 }
 
 // Teacher portal
