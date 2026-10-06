@@ -458,16 +458,24 @@ if(fs.existsSync(sigDG)){
   });
 }
 
-/* Signature Directeur des Études — ligne droite */
-if(fs.existsSync(sigWJ)){
-  doc.image(sigWJ,490,490,{
+/* Directeur des Études — nom et titre uniquement */
+doc.fillColor('#111')
+  .font('Helvetica-Bold')
+  .fontSize(12)
+  .text('Wilio Joseph',490,490,{
     width:145,
-    height:58,
-    fit:[145,58],
     align:'center',
-    valign:'center'
+    lineBreak:false
   });
-}
+
+doc.fillColor('#333')
+  .font('Helvetica')
+  .fontSize(9)
+  .text('Directeur des Études',490,507,{
+    width:145,
+    align:'center',
+    lineBreak:false
+  });
 
 /* =========================================================
    INFORMATIONS DYNAMIQUES
