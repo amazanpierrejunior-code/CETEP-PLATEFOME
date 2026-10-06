@@ -457,7 +457,23 @@ if(fs.existsSync(sigDG)){
     valign:'center'
   });
 }
+doc.fillColor('#111')
+  .font('Helvetica-Bold')
+  .fontSize(11)
+  .text('Agronome Livenson Fleuriot',145,552,{
+    width:195,
+    align:'center',
+    lineBreak:false
+  });
 
+doc.fillColor('#333')
+  .font('Helvetica')
+  .fontSize(9)
+  .text('Directeur Général',145,568,{
+    width:195,
+    align:'center',
+    lineBreak:false
+  });
 /* Directeur des Études — nom et titre uniquement */
 doc.fillColor('#111')
   .font('Helvetica-Bold')
@@ -501,7 +517,7 @@ doc.fillColor('#1b1f3a')
 /* Formation — centrée sur la deuxième ligne */
 doc.fillColor('#1b1f3a')
    .font('Times-Roman')
-   .fontSize(13)
+  .fontSize(18)
    .text(formation,145,380,{
       width:560,
       align:'center',
