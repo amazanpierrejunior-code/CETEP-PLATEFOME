@@ -1,0 +1,20 @@
+CETEP — Correctif multi-formations v14.5.0
+
+CONTENU
+- server.js : migrations SQLite et API pour plusieurs formations par étudiant, paiements par formation, accès et certificats par formation.
+- admin.html : gestion des formations d’un étudiant, autorisation/suspension par formation, paiement et résultats par formation.
+- student.html : sélecteur de formation dans l’espace étudiant, cours et certificat propres à chaque formation.
+
+INSTALLATION SUR GITHUB
+1. Téléversez/remplacez ces 3 fichiers à la RACINE du dépôt CETEP-PLATEFOME (au même niveau que package.json et Dockerfile).
+2. Gardez les autres fichiers et dossiers existants, notamment public/, promotions/, package.json, Dockerfile et render.yaml.
+3. Créez un commit sur la branche main, par exemple : Correctif multi-formations CETEP v14.5.0.
+4. Attendez que Render termine le déploiement.
+5. Vérifiez /health et /api/version : la version doit être 14.5.0.
+6. Avant d’utiliser la plateforme avec de vraies données, téléchargez une sauvegarde depuis Administration > Sauvegarde.
+
+IMPORTANT
+- Le correctif migre automatiquement la base existante : il ajoute les colonnes nécessaires et crée les inscriptions de formation manquantes pour les anciens dossiers étudiants.
+- Ne supprimez pas le disque de données Render ni le fichier data/cetep.sqlite.
+- Cette archive ne contient pas les images ni tous les autres fichiers du site; elle est conçue pour remplacer seulement les 3 fichiers indiqués.
+- Les tests effectués ici comprennent la vérification de syntaxe JavaScript et un test SQLite isolé des migrations, de l’isolation des paiements par formation et du blocage des inscriptions en double. L’application complète n’a pas pu être démarrée dans cet environnement car ses dépendances Node.js n’étaient pas installées et l’accès réseau était indisponible. Il faut donc vérifier le déploiement Render avant de considérer la version comme validée en production.
