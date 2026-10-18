@@ -1,20 +1,19 @@
-CETEP — Correctif multi-formations v14.5.0
+CETEP v14.6.4 — CANDIDAT DE PERSISTANCE NEON (NE PAS DÉPLOYER)
 
-CONTENU
-- server.js : migrations SQLite et API pour plusieurs formations par étudiant, paiements par formation, accès et certificats par formation.
-- admin.html : gestion des formations d’un étudiant, autorisation/suspension par formation, paiement et résultats par formation.
-- student.html : sélecteur de formation dans l’espace étudiant, cours et certificat propres à chaque formation.
+Cette copie contient des corrections de sécurité qui n'ont pas encore été validées par un démarrage complet de l'application.
 
-INSTALLATION SUR GITHUB
-1. Téléversez/remplacez ces 3 fichiers à la RACINE du dépôt CETEP-PLATEFOME (au même niveau que package.json et Dockerfile).
-2. Gardez les autres fichiers et dossiers existants, notamment public/, promotions/, package.json, Dockerfile et render.yaml.
-3. Créez un commit sur la branche main, par exemple : Correctif multi-formations CETEP v14.5.0.
-4. Attendez que Render termine le déploiement.
-5. Vérifiez /health et /api/version : la version doit être 14.5.0.
-6. Avant d’utiliser la plateforme avec de vraies données, téléchargez une sauvegarde depuis Administration > Sauvegarde.
+Corrections principales :
+- Suppression des mots de passe par défaut 123456 et du code étudiant utilisé comme mot de passe.
+- Génération de mots de passe temporaires aléatoires lorsqu'un administrateur crée un compte sans saisir de mot de passe.
+- Les mots de passe saisis par l'administrateur doivent contenir au moins 12 caractères.
+- Le mot de passe temporaire est affiché une seule fois à l'administrateur, qui doit le transmettre en privé.
+- L'accès global d'un étudiant ne peut pas autoriser automatiquement toutes ses formations.
+- La connexion étudiant exige un compte activé et au moins une inscription autorisée.
+- Les points d'entrée de paiement refusent les montants nuls ou négatifs.
 
-IMPORTANT
-- Le correctif migre automatiquement la base existante : il ajoute les colonnes nécessaires et crée les inscriptions de formation manquantes pour les anciens dossiers étudiants.
-- Ne supprimez pas le disque de données Render ni le fichier data/cetep.sqlite.
-- Cette archive ne contient pas les images ni tous les autres fichiers du site; elle est conçue pour remplacer seulement les 3 fichiers indiqués.
-- Les tests effectués ici comprennent la vérification de syntaxe JavaScript et un test SQLite isolé des migrations, de l’isolation des paiements par formation et du blocage des inscriptions en double. L’application complète n’a pas pu être démarrée dans cet environnement car ses dépendances Node.js n’étaient pas installées et l’accès réseau était indisponible. Il faut donc vérifier le déploiement Render avant de considérer la version comme validée en production.
+État des tests : voir CETEP-VERIFICATION-REPORT-14.6.4.txt.
+
+IMPORTANT : ne téléversez pas ce paquet sur GitHub/Render tant que les tests fonctionnels avec les dépendances Node.js et la vérification du stockage persistant ne sont pas terminés. Aucune migration Neon n'est incluse. Ne partagez jamais JWT_SECRET, DATABASE_URL ou les mots de passe par chat.
+
+
+État du candidat 14.6.4 : intégration initiale de la persistance Neon par snapshot JSONB compressé; tests statiques et syntaxiques réussis. Installation npm, démarrage réel, connexion Neon et tests de redémarrage non réalisés dans cet environnement. Ce n’est pas une migration PostgreSQL native et ce paquet ne doit pas être déployé avant les tests d’intégration.

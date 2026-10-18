@@ -1,9 +1,11 @@
 {
   "name": "cetep-plateforme",
-  "version": "14.4.8",
+  "version": "14.6.8",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:static": "node test-cetep-static.js && node test-cetep-1462-static.js",
+    "test:offline": "node --check server.js && node --check admin.js && node --check app.js && node test-cetep-static.js && node test-cetep-1462-static.js && python3 test-cetep-sqlite.py && python3 test-cetep-neon-snapshot.py"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -14,6 +16,7 @@
     "jsonwebtoken": "^9.0.2",
     "pdfkit": "^0.17.2",
     "qrcode": "^1.5.4",
-    "nodemailer": "^7.0.6"
+    "nodemailer": "^7.0.6",
+    "@neondatabase/serverless": "^1.0.2"
   }
 }

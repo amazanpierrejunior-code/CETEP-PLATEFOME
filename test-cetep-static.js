@@ -1,0 +1,42 @@
+'use strict';
+const fs = require('fs');
+const assert = require('assert');
+const server = fs.readFileSync('server.js','utf8');
+const index = fs.readFileSync('index.html','utf8');
+const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
+const render = fs.readFileSync('render.yaml','utf8');
+let passed = 0;
+function check(name, fn) { fn(); passed++; console.log('PASS ' + name); }
+check('package JSON parses', () => assert(pkg.version === '14.6.8'));
+check('app release version aligned', () => assert(server.includes("APP_VERSION='14.6.8-consolidated-staging'")));
+check('admin reset is explicit, password-strength checked, and scoped to configured admin email', () => { assert(server.includes("FORCE_ADMIN_RESET||''")); assert(server.includes('UPDATE admins SET email=?,password_hash=? WHERE id=?')); assert(server.includes('p.length<12')); });
+check('multi-enrollment uniqueness is per student and program', () => assert(/UNIQUE\(student_id,program_id\)/.test(server)));
+check('legacy program is migrated into enrollments', () => assert(server.includes("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id")));
+check('same-program duplicate admission is rejected', () => assert(server.includes("Vous êtes déjà inscrit à cette formation.")));
+check('existing identity requires matching name and phone', () => assert(server.includes("cleanText(b.name)===cleanText(existing.name) && cleanPhone(b.phone)===cleanPhone(existing.phone)")));
+check('existing DOB must match when present', () => assert(server.includes("(!existing.birth_date || String(b.birth_date||'')===String(existing.birth_date))")));
+check('public lookup does not query or return student records', () => {
+ const route = server.slice(server.indexOf("app.get('/api/public/student-lookup'"), server.indexOf("app.get('/api/public/programs'"));
+ assert(!route.includes('FROM students'));
+ assert(!route.includes('student_no'));
+});
+check('public form does not disclose existing student profile', () => assert(index.includes('la vérification de l’identité se fait lors de l’envoi du formulaire') || index.includes('CETEP vérifiera votre identité lors de l’envoi du formulaire')));
+check('payment accounting is scoped to program', () => assert(server.includes("WHERE student_id=? AND program_id=? AND status='Confirmé'")));
+check('certificate requires passing result, full completion and full payment', () => {
+ const body = server.slice(server.indexOf('function tryAutoIssueCertificate'), server.indexOf('function autoCertificateForStudent'));
+ assert(body.includes("result.status!=='Réussi'")); assert(body.includes('completion.percent<100')); assert(body.includes('!payment.fullyPaid'));
+});
+check('teacher content creation checks assigned program', () => assert(server.includes('JOIN program_teachers pt ON pt.program_id=m.program_id WHERE m.id=? AND pt.teacher_id=?')));
+check('Render staging is isolated, free-tier, and declares ephemeral data path', () => { assert(render.includes('name: cetep-plateforme-staging')); assert(render.includes('plan: free')); assert(render.includes('value: /tmp/cetep-data')); assert(render.includes('key: DATA_DIR')); assert(!render.includes('mountPath: /app/data')); });
+check('production refuses missing or weak JWT_SECRET', () => assert(server.includes('CONFIGURED_SECRET.length<32') && server.includes('IS_PRODUCTION')));
+check('production requires explicit first-admin credentials', () => assert(server.includes('ADMIN_PASSWORD (12 caractères minimum)') && server.includes('if(IS_PRODUCTION && (!e || !p || p.length<12))')));
+check('no student-number default password for public admissions', () => assert(server.includes('bcrypt.hashSync(generateTemporaryPassword(),12),0)')));
+check('admin-created student and teacher passwords are strong or generated', () => { assert(server.includes('passwordIsStrong(suppliedPassword)')); assert(server.includes('generateTemporaryPassword()')); assert(!server.includes("b.password||'123456'")); });
+check('temporary password is returned once to the authorized admin', () => assert(server.includes("{temporary_password:temporaryPassword}")));
+check('global access does not authorize every enrollment', () => { assert(server.includes('Autorisez d’abord au moins une formation')); assert(!server.includes('UPDATE enrollments SET access_enabled=?,status=?,manual_authorized=? WHERE student_id=?')); });
+check('student login requires account and enrollment access', () => assert(server.includes('Number(s.access_enabled)!==1')));
+check('payment endpoints reject zero and negative amounts', () => { assert(server.includes('Number(b.amount)<=0')); assert(server.includes('Number(b.amount_htg)<=0')); });
+check('MonCash, NatCash and Zelle beneficiary details are seeded safely', () => { assert(server.includes("'MonCash','Pierre Junior Amazan','37365610'")); assert(server.includes("'Natcash','Martha Cherisene','43785235','Voye peman an sou nimewo NatCash sa a. Verifye non Martha Cherisene anvan ou konfime tranzaksyon an.'")); assert(server.includes("'Zelle','Estime Esther','5616742890'")); assert(server.includes("WHEN trim(COALESCE(account_name,''))='' THEN ?")); });
+check('payment instructions update when the student changes payment method', () => { const page=fs.readFileSync('index.html','utf8'); assert(page.includes('function renderSelectedPaymentMethod()')); assert(page.includes("$('#paymentMethod').addEventListener('change',renderSelectedPaymentMethod)")); });
+check('NatCash defaults preserve existing values and clearly flag missing number', () => { assert(server.includes("{name:'Natcash',account_name:'Martha Cherisene',account_value:'43785235'")); assert(server.includes('43785235')); });
+console.log(`RESULT ${passed}/25 static checks passed`);

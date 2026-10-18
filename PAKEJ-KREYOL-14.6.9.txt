@@ -1,0 +1,5 @@
+CETEP — PAKEJ KONSOLIDE 14.6.9 (CANDIDAT POU VERIFIKASYON)
+
+Pake sa a baze sou sous v14.6.8 staging ki te deja egziste. Mwen mete ajou etikèt lajan ki parèt nan paj piblik, admin, elèv ak mòd lokal pou montre $ HT (dola ayisyen), pandan non teknik API/baz done yo rete menm jan pou limite risk konpatibilite.
+
+ENPÒTAN: Pake sa a PA deplwaye sou GitHub/Render, epi li pa dwe ranplase pwodiksyon an san verifikasyon. Sous aktyèl GitHub/Render la pa t ekstrè dirèkteman nan sesyon sa a. Fè backup baz done pwodiksyon an anvan nenpòt deplwaman. Pa retabli backup vid. Verifye login admin, pwogram, peman, enskripsyon, aksè kou, sètifika, backup/restore ak depo done apre tès staging.

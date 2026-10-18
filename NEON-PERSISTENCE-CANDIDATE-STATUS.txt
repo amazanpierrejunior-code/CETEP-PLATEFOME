@@ -1,0 +1,28 @@
+CETEP v14.6.4 — NEON PERSISTENCE CANDIDATE
+Status date: 2026-10-11
+STAGING TEST PACKAGE ONLY — NOT APPROVED FOR PRODUCTION DEPLOYMENT
+
+Update from v14.6.3:
+- Added a health diagnostic that reports Neon reachability and snapshot timestamp without exposing credentials.
+- SQLite total-change counter remains a second signal for persistence tracking, supplementing the prepared-statement proxy.
+- Static regression test added for the total-change counter.
+
+Offline checks:
+- JavaScript syntax: server.js, admin.js, app.js PASS.
+- Existing static checks: 21/21 PASS.
+- Neon/persistence static checks: 29/29 PASS.
+- SQLite schema/multi-enrollment simulations: 3/3 PASS.
+- Snapshot round-trip/incomplete snapshot rejection/foreign-key rollback simulations: 3/3 PASS.
+
+Not verified:
+- npm dependency installation and Express runtime remain unavailable in this environment because DNS lookup for registry.npmjs.org fails.
+- No live Neon connection, remote JSONB write/restore, or Render restart/redeploy test.
+- No end-to-end test for admissions, payments, teacher permissions, certificates, email, or backup/restore.
+- The public GitHub main branch was checked and currently reports package version 14.4.8 / app version 14.5.0-multi-enrollment. This working candidate is based on the uploaded project archive, not the public main branch; the source versions must be reconciled before deployment.
+- Live Render version could not be verified from this environment.
+
+Architecture note: SQLite remains the application query database; Neon stores a compressed JSONB snapshot. This is a persistence bridge, not a native PostgreSQL migration.
+
+A staging-only Render manifest was prepared (service name cetep-plateforme-staging, Free plan, no persistent disk). No changes were made to GitHub, Render, or Neon. No production data was modified.
+
+Deployment decision: DO NOT DEPLOY YET. Required before production: reconcile source parity; install dependencies and launch runtime; test against a non-production Neon database; verify persistence across restart/redeploy; back up production data; and prepare rollback.

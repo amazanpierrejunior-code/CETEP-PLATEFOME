@@ -1,0 +1,22 @@
+CETEP v14.6.3 STAGING TEST PACKAGE
+
+This is an isolated test candidate, not a production release.
+- SQLite remains the application's query database.
+- Neon stores a compressed JSONB snapshot; this is not a native PostgreSQL migration.
+- Do not connect this candidate to the existing production Neon project.
+- Do not deploy to the existing live Render service or replace GitHub main.
+- Use a separate empty Neon project and a separate Render staging service.
+
+Locally reproduced checks:
+- JavaScript syntax: PASS (server.js, admin.js, app.js)
+- General static checks: 21/21 PASS
+- Neon/persistence static checks: 27/27 PASS
+- SQLite schema/multi-enrollment simulations: 3/3 PASS
+- Snapshot safety simulations: 3/3 PASS
+
+Not yet verified:
+- Live Neon connection/write/read/restore
+- Render runtime and restart/redeploy persistence
+- End-to-end admission, payment, email, teacher permissions, certificates and backup/restore
+
+Follow TEST-EN-COURS-NEON-RENDER-KREYOL.md. Never share DATABASE_URL, passwords, tokens or SMTP credentials in chat or GitHub.

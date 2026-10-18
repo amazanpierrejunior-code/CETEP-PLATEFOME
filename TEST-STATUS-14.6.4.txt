@@ -1,0 +1,8 @@
+CETEP v14.6.5 — STAGING ONLY
+
+Update from v14.6.3:
+- /health now reports persistence mode, whether DATABASE_URL is configured, whether Neon is reachable, and the remote snapshot timestamp. It does not expose connection credentials.
+- If Neon is unreachable or the snapshot row is missing, /health returns HTTP 503, making the issue visible during staging checks.
+- This remains a SQLite application with a Neon JSONB snapshot persistence bridge. It is NOT a native PostgreSQL migration and is NOT approved for production.
+
+Required integration tests: install dependencies; start the app with a dedicated non-production Neon database; verify /health; create a test student and enrollment; confirm the snapshot timestamp changes; restart the service; confirm the test data survives; test failed remote writes and rollback/backup behavior.

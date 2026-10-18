@@ -1,0 +1,26 @@
+CETEP v14.6.5 — RAPPORT DE VÉRIFICATION DU CANDIDAT STAGING
+Date: 2026-10-13
+
+Changement de cette révision
+- /health expose le mode de persistance (sqlite+neon-snapshot ou sqlite-local), la présence de DATABASE_URL, la joignabilité de Neon et la date de mise à jour du snapshot. Aucun secret n’est exposé.
+- /health retourne HTTP 503 si Neon n’est pas joignable ou si le snapshot distant manque.
+- Cette version reste un pont de persistance SQLite + snapshot JSONB Neon; elle n’est PAS une migration PostgreSQL native.
+
+Tests exécutés localement
+- node --check server.js: PASS
+- node --check admin.js: PASS
+- node --check app.js: PASS
+- test-cetep-static.js: 21/21 PASS
+- test-cetep-1462-static.js: 29/29 PASS
+- test-cetep-sqlite.py: 3/3 PASS
+- test-cetep-neon-snapshot.py: 3/3 PASS
+- Total: 56 vérifications locales statiques/simulations PASS.
+
+Non testé / bloque encore la mise en production
+- npm install / lancement réel du serveur avec toutes les dépendances.
+- Connexion à une base Neon réelle.
+- Création/modification d’un dossier dans l’application, vérification que updated_at change, puis redémarrage du service pour confirmer la restauration.
+- Test d’échec réseau pendant une écriture et test complet des parcours d’admission, paiements, permissions, certificats, courriels et sauvegarde/restauration.
+- La branche GitHub main et le service Render de production n’ont pas été modifiés.
+
+Décision: STAGING UNIQUEMENT — NE PAS DÉPLOYER SUR LE SERVICE DE PRODUCTION. Utiliser une nouvelle base Neon et un nouveau service Render de test.

@@ -1,3 +1,7 @@
+# IMPORTANT — paquet de test CETEP v14.6.4
+
+Ce document décrit des paramètres généraux hérités. Pour ce paquet de test, suivez en priorité `TEST-EN-COURS-NEON-RENDER-KREYOL.md`. Créez un service Render staging distinct et un projet Neon vide distinct. N'utilisez ni le service Render existant, ni la base Neon de production. Le candidat utilise SQLite comme moteur applicatif et un snapshot JSONB Neon pour la persistance; ce n'est pas une migration PostgreSQL native.
+
 # CETEP — Déploiement Render
 
 ## URLs publiques

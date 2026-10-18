@@ -1,0 +1,9 @@
+CETEP v14.6.7 — STAGING ONLY
+
+Mete benefisyè NatCash la sou non Martha Cherisene. Nimewo NatCash la poko bay, kidonk chan nimewo a rete vid epi enstriksyon yo avèti pou pa voye peman an jiskaske CETEP konfime nimewo a.
+MonCash: 37365610 — Pierre Junior Amazan.
+Zelle: 5616742890 — Estime Esther.
+Koreksyon an ranpli enfòmasyon ki manke yo san li pa ranplase valè administratè a te deja modifye.
+Rekiperasyon administratè rete opsyonèl atravè FORCE_ADMIN_RESET=true ak modpas omwen 12 karaktè.
+
+STAGING ONLY: pa deplwaye sou pwodiksyon san tès sou staging ak backup verifye.

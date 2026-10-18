@@ -1,4 +1,4 @@
-# CETEP Plateforme v14.2.0 FINAL
+# CETEP Plateforme v14.6.4 — candidat de persistance Neon, non déployable
 
 Plateforme de gestion et formation en ligne pour le Centre d'Encadrement Technique et Professionnel.
 
@@ -12,10 +12,10 @@ Plateforme de gestion et formation en ligne pour le Centre d'Encadrement Techniq
 - Sauvegarde JSON téléchargeable et restauration.
 - SQLite stocké dans `DATA_DIR`.
 
-## Render
-Le `render.yaml` attache un persistent disk à `/app/data`. Render précise que le filesystem normal est éphémère et qu'un persistent disk est nécessaire pour conserver des fichiers locaux; les disques persistants sont disponibles sur les web services payants. Voir https://render.com/docs/disks.
+## Render — staging seulement
+Le `render.yaml` de ce paquet crée un service **`cetep-plateforme-staging`** sur le plan Free, sans disque payant, pour tester l'intégration Neon sur un service séparé. Il ne faut pas l'utiliser pour remplacer le service CETEP en production. Utilisez un projet Neon de test vide et indépendant.
 
-Variables: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`, `DATA_DIR=/app/data`.
+Variables: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`, `DATABASE_URL` (Neon de test seulement), `DATA_DIR=/tmp/cetep-data`. Voir `TEST-EN-COURS-NEON-RENDER-KREYOL.md` pour les étapes détaillées.
 
 ## Correctifs v10.1
 - Correctif du démarrage SQLite pour la méthode Compte bancaire.
@@ -57,3 +57,13 @@ Les formations déjà présentes sont conservées. Le démarrage ajoute uniqueme
 - Cache-busting des visuels principaux.
 - Modèle officiel de certificat CETEP 2026 conservé.
 - Version vérifiable via `/api/version` et `/health`.
+
+
+## v14.6.4 — corrections de sécurité en cours de validation
+- Les mots de passe par défaut faibles sont supprimés; les mots de passe temporaires sont aléatoires.
+- L'accès global d'un étudiant ne doit pas ouvrir toutes ses formations.
+- Les montants de paiement nuls ou négatifs sont rejetés.
+- Cette copie est un aperçu de travail et ne doit pas être déployée avant validation fonctionnelle.
+
+
+État du candidat 14.6.4 : intégration initiale de la persistance Neon par snapshot JSONB compressé; tests statiques et syntaxiques réussis. Installation npm, démarrage réel, connexion Neon et tests de redémarrage non réalisés dans cet environnement. Ce n’est pas une migration PostgreSQL native et ce paquet ne doit pas être déployé avant les tests d’intégration.
