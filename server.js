@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.5.0-multi-enrollment';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.5.1-admin-recovery';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 app.use(express.json({limit:'20mb'}));app.use(express.urlencoded({extended:true,limit:'20mb'}));app.use(cookieParser());app.use(express.static(path.join(__dirname,'public'),{etag:true}));
 // Static promotion assets live in /promotions at the project root. Serve them explicitly.
 app.use('/promotions',express.static(path.join(__dirname,'promotions'),{etag:true,maxAge:'1h'}));
@@ -107,7 +107,25 @@ const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');fo
 const currentSettings=Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));
 if(!String(currentSettings.phone||'').trim())db.prepare("UPDATE settings SET value=? WHERE key='phone'").run(defaults.phone);
 if(!String(currentSettings.email||'').trim())db.prepare("UPDATE settings SET value=? WHERE key='email'").run(defaults.email);
-if(!db.prepare('SELECT 1 FROM admins LIMIT 1').get()){const e=process.env.ADMIN_EMAIL||'admin@cetep.ht',p=process.env.ADMIN_PASSWORD||'CHANGEZ_MOI';db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(e,bcrypt.hashSync(p,12));}
+// Controlled administrator recovery. This does not delete or reset any school data.
+// Set FORCE_ADMIN_RESET=true for one deployment with ADMIN_EMAIL and a strong ADMIN_PASSWORD,
+// confirm login, then immediately remove FORCE_ADMIN_RESET (or set it to false).
+{
+  const email=String(process.env.ADMIN_EMAIL||'admin@cetep.ht').trim().toLowerCase();
+  const password=String(process.env.ADMIN_PASSWORD||'');
+  const forceReset=String(process.env.FORCE_ADMIN_RESET||'').trim().toLowerCase()==='true';
+  const existing=db.prepare('SELECT id FROM admins WHERE lower(email)=? LIMIT 1').get(email);
+  if(forceReset){
+    if(!password || password.length<12) throw new Error('FORCE_ADMIN_RESET=true mande ADMIN_PASSWORD ki gen omwen 12 karaktè.');
+    const hash=bcrypt.hashSync(password,12);
+    if(existing) db.prepare('UPDATE admins SET password_hash=? WHERE id=?').run(hash,existing.id);
+    else db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(email,hash);
+    console.warn('[CETEP ADMIN] Admin recovery applied. Retire FORCE_ADMIN_RESET apre koneksyon an verifye.');
+  } else if(!db.prepare('SELECT 1 FROM admins LIMIT 1').get()){
+    if(!password) throw new Error('ADMIN_PASSWORD obligatwa pou kreye premye administratè a.');
+    db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(email,bcrypt.hashSync(password,12));
+  }
+}
 // Catalogue de base CETEP : on conserve les formations existantes et on ajoute
 // les formations officielles visibles sur le flyer. Cette logique n'écrase jamais
 // une formation déjà enregistrée dans la base.
