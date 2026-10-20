@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.6.8-consolidated-staging';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.6.10-staging-admin-recovery-fix';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -141,24 +141,27 @@ const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');fo
 const currentSettings=Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));
 if(!String(currentSettings.phone||'').trim())db.prepare("UPDATE settings SET value=? WHERE key='phone'").run(defaults.phone);
 if(!String(currentSettings.email||'').trim())db.prepare("UPDATE settings SET value=? WHERE key='email'").run(defaults.email);
-// Admin bootstrap/recovery. Normal startup never overwrites an existing password.
-// Set FORCE_ADMIN_RESET=true deliberately for one deployment to synchronize the
-// admin matching ADMIN_EMAIL with ADMIN_PASSWORD. This does not delete any school data.
-{
+// Admin bootstrap/recovery MUST run after the Neon snapshot has been restored.
+// Otherwise the snapshot can overwrite the freshly reset password at startup.
+function synchronizeAdminAccount(){
   const e=String(process.env.ADMIN_EMAIL||'').trim().toLowerCase();
   const p=String(process.env.ADMIN_PASSWORD||'');
   const reset=String(process.env.FORCE_ADMIN_RESET||'').trim().toLowerCase()==='true';
   const existing=e ? db.prepare('SELECT id FROM admins WHERE lower(email)=?').get(e) : null;
+  let changed=false;
   if(reset){
     if(!e || !p || p.length<12) throw new Error('FORCE_ADMIN_RESET=true mande ADMIN_EMAIL ak ADMIN_PASSWORD ki gen omwen 12 karaktè.');
     const hash=bcrypt.hashSync(p,12);
     if(existing) db.prepare('UPDATE admins SET email=?,password_hash=? WHERE id=?').run(e,hash,existing.id);
     else db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(e,hash);
-    console.warn('[CETEP ADMIN] Admin password reset applied for configured ADMIN_EMAIL. Set FORCE_ADMIN_RESET=false or remove it after successful recovery.');
+    changed=true;
+    console.warn('[CETEP ADMIN] Admin password reset applied AFTER Neon snapshot restore. Set FORCE_ADMIN_RESET=false or remove it after successful recovery.');
   } else if(!db.prepare('SELECT 1 FROM admins LIMIT 1').get()){
     if(IS_PRODUCTION && (!e || !p || p.length<12)) throw new Error('Configuration CETEP invalide: ADMIN_EMAIL et ADMIN_PASSWORD (12 caractères minimum) sont requis pour créer le premier administrateur.');
     db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(e||'admin@cetep.local',bcrypt.hashSync(p||'local-only-password-change-me',12));
+    changed=true;
   }
+  return changed;
 }
 // Catalogue de base CETEP : on conserve les formations existantes et on ajoute
 // les formations officielles visibles sur le flyer. Cette logique n'écrase jamais
@@ -840,6 +843,12 @@ async function startCETEP(){
     console.log('[CETEP] Persistance Neon activée.');
   }else{
     console.warn('[CETEP] DATABASE_URL absent: mode local uniquement, non recommandé en production.');
+  }
+  // Critical order: restore Neon first, then apply admin bootstrap/reset, then persist it.
+  const adminChanged=synchronizeAdminAccount();
+  if(neonSql && adminChanged){
+    await flushNeonSnapshot();
+    console.log('[CETEP ADMIN] Admin account changes persisted to Neon snapshot.');
   }
   app.listen(PORT,'0.0.0.0',()=>console.log(`CETEP v${APP_VERSION} running on ${PORT}`));
 }
