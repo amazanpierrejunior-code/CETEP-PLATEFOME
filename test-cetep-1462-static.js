@@ -5,7 +5,7 @@ const server=fs.readFileSync(path.join(root,'server.js'),'utf8');
 const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
 const render=fs.readFileSync(path.join(root,'render.yaml'),'utf8');
 const checks=[
-  ['version updated',server.includes("14.6.8-consolidated-staging")&&pkg.version==='14.6.8'],
+  ['version updated',server.includes("14.6.12-certificate-training-dates-finalization")&&pkg.version==='14.6.12'],
   ['Neon dependency declared',Boolean(pkg.dependencies['@neondatabase/serverless'])],
   ['Render DATABASE_URL variable declared',/key: DATABASE_URL\s*\n\s*sync: false/.test(render)],
   ['production refuses missing DATABASE_URL',/IS_PRODUCTION&&!neonSql/.test(server)],

@@ -7,8 +7,8 @@ const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
 const render = fs.readFileSync('render.yaml','utf8');
 let passed = 0;
 function check(name, fn) { fn(); passed++; console.log('PASS ' + name); }
-check('package JSON parses', () => assert(pkg.version === '14.6.8'));
-check('app release version aligned', () => assert(server.includes("APP_VERSION='14.6.8-consolidated-staging'")));
+check('package JSON parses', () => assert(pkg.version === '14.6.12'));
+check('app release version aligned', () => assert(server.includes("APP_VERSION='14.6.12-certificate-training-dates-finalization'")));
 check('admin reset is explicit, password-strength checked, and scoped to configured admin email', () => { assert(server.includes("FORCE_ADMIN_RESET||''")); assert(server.includes('UPDATE admins SET email=?,password_hash=? WHERE id=?')); assert(server.includes('p.length<12')); });
 check('multi-enrollment uniqueness is per student and program', () => assert(/UNIQUE\(student_id,program_id\)/.test(server)));
 check('legacy program is migrated into enrollments', () => assert(server.includes("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id")));
@@ -39,4 +39,6 @@ check('payment endpoints reject zero and negative amounts', () => { assert(serve
 check('MonCash, NatCash and Zelle beneficiary details are seeded safely', () => { assert(server.includes("'MonCash','Pierre Junior Amazan','37365610'")); assert(server.includes("'Natcash','Martha Cherisene','43785235','Voye peman an sou nimewo NatCash sa a. Verifye non Martha Cherisene anvan ou konfime tranzaksyon an.'")); assert(server.includes("'Zelle','Estime Esther','5616742890'")); assert(server.includes("WHEN trim(COALESCE(account_name,''))='' THEN ?")); });
 check('payment instructions update when the student changes payment method', () => { const page=fs.readFileSync('index.html','utf8'); assert(page.includes('function renderSelectedPaymentMethod()')); assert(page.includes("$('#paymentMethod').addEventListener('change',renderSelectedPaymentMethod)")); });
 check('NatCash defaults preserve existing values and clearly flag missing number', () => { assert(server.includes("{name:'Natcash',account_name:'Martha Cherisene',account_value:'43785235'")); assert(server.includes('43785235')); });
-console.log(`RESULT ${passed}/25 static checks passed`);
+check('student records support legacy codes and training dates', () => { assert(server.includes('start_date')); assert(server.includes('end_date')); assert(server.includes('student_no')); });
+check('certificate PDF displays training period separately from issue date', () => { assert(server.includes('Période de formation : du ${debut} au ${finFormation}')); assert(server.includes('const fin=formatCertificateDate(c.issued_at)')); });
+console.log(`RESULT ${passed}/27 static checks passed`);
