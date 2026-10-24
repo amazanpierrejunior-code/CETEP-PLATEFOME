@@ -560,7 +560,7 @@ doc.pipe(res);
 res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
 res.setHeader('Pragma','no-cache');
 res.setHeader('Expires','0');
-res.setHeader('X-CETEP-Certificate-Model','14.4.12');
+res.setHeader('X-CETEP-Certificate-Model','14.6.12-certificate-layout-fix');
 
 const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
 
@@ -637,8 +637,25 @@ const formatCertificateDate=value=>{
   return Number.isNaN(d.getTime())?'—':d.toLocaleDateString('fr-FR');
 };
 const fin=formatCertificateDate(c.issued_at);
-const debut=formatCertificateDate(c.start_date);
-const finFormation=formatCertificateDate(c.end_date);
+// Use the saved enrollment date if a start date was not entered.
+const rawStart=c.start_date||c.enrolled_at||null;
+const parseDate=value=>{
+  if(!value)return null;
+  const raw=String(value).slice(0,10);
+  const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(m){const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));return Number.isNaN(d.getTime())?null:d;}
+  const d=new Date(value);return Number.isNaN(d.getTime())?null:d;
+};
+const startDate=parseDate(rawStart);
+let endDate=parseDate(c.end_date);
+// If no end date was saved, derive a provisional date only when program duration explicitly states months.
+if(!endDate && startDate){
+  const durationMatch=String(c.duration||'').match(/(\d+)\s*(?:mois|month|months)/i);
+  if(durationMatch){endDate=new Date(startDate);endDate.setMonth(endDate.getMonth()+Number(durationMatch[1]));}
+}
+const dateText=d=>d?formatCertificateDate(d.toISOString().slice(0,10)):'Non renseignée';
+const debut=dateText(startDate);
+const finFormation=dateText(endDate);
 
 /* Nom de l'étudiant — centré sur la première ligne */
 doc.fillColor('#1b1f3a')
