@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.5.1-admin-recovery';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.6.1-certificate-title-fix';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 app.use(express.json({limit:'20mb'}));app.use(express.urlencoded({extended:true,limit:'20mb'}));app.use(cookieParser());app.use(express.static(path.join(__dirname,'public'),{etag:true}));
 // Static promotion assets live in /promotions at the project root. Serve them explicitly.
 app.use('/promotions',express.static(path.join(__dirname,'promotions'),{etag:true,maxAge:'1h'}));
@@ -107,25 +107,7 @@ const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');fo
 const currentSettings=Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));
 if(!String(currentSettings.phone||'').trim())db.prepare("UPDATE settings SET value=? WHERE key='phone'").run(defaults.phone);
 if(!String(currentSettings.email||'').trim())db.prepare("UPDATE settings SET value=? WHERE key='email'").run(defaults.email);
-// Controlled administrator recovery. This does not delete or reset any school data.
-// Set FORCE_ADMIN_RESET=true for one deployment with ADMIN_EMAIL and a strong ADMIN_PASSWORD,
-// confirm login, then immediately remove FORCE_ADMIN_RESET (or set it to false).
-{
-  const email=String(process.env.ADMIN_EMAIL||'admin@cetep.ht').trim().toLowerCase();
-  const password=String(process.env.ADMIN_PASSWORD||'');
-  const forceReset=String(process.env.FORCE_ADMIN_RESET||'').trim().toLowerCase()==='true';
-  const existing=db.prepare('SELECT id FROM admins WHERE lower(email)=? LIMIT 1').get(email);
-  if(forceReset){
-    if(!password || password.length<12) throw new Error('FORCE_ADMIN_RESET=true mande ADMIN_PASSWORD ki gen omwen 12 karaktè.');
-    const hash=bcrypt.hashSync(password,12);
-    if(existing) db.prepare('UPDATE admins SET password_hash=? WHERE id=?').run(hash,existing.id);
-    else db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(email,hash);
-    console.warn('[CETEP ADMIN] Admin recovery applied. Retire FORCE_ADMIN_RESET apre koneksyon an verifye.');
-  } else if(!db.prepare('SELECT 1 FROM admins LIMIT 1').get()){
-    if(!password) throw new Error('ADMIN_PASSWORD obligatwa pou kreye premye administratè a.');
-    db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(email,bcrypt.hashSync(password,12));
-  }
-}
+if(!db.prepare('SELECT 1 FROM admins LIMIT 1').get()){const e=process.env.ADMIN_EMAIL||'admin@cetep.ht',p=process.env.ADMIN_PASSWORD||'CHANGEZ_MOI';db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(e,bcrypt.hashSync(p,12));}
 // Catalogue de base CETEP : on conserve les formations existantes et on ajoute
 // les formations officielles visibles sur le flyer. Cette logique n'écrase jamais
 // une formation déjà enregistrée dans la base.
@@ -295,7 +277,7 @@ async function sendStudentConfirmation(student, programName){
 
 app.get('/health',(req,res)=>res.json({ok:true,service:'CETEP',version:APP_VERSION,storage:DATA_DIR}));
 function sendPage(res,file){const pub=path.join(__dirname,'public',file);const root=path.join(__dirname,file);if(fs.existsSync(pub))return res.sendFile(pub);if(fs.existsSync(root))return res.sendFile(root);return res.status(404).send('Page introuvable: '+file);}
-app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-2026-clean-template.png',certificate_model_version:'14.4.9-exact-template',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.4.8-official-exact-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
+app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-2026-clean-template.png',certificate_model_version:'14.6.1-title-without-participation',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.4.8-official-exact-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
 function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
 app.post('/api/login',adminLogin);app.post('/api/login/admin',adminLogin);
 function teacherLogin(req,res){const t=db.prepare('SELECT * FROM teachers WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!t||!t.active||!bcrypt.compareSync(req.body.password||'',t.password_hash))return res.status(401).json({error:'Identifiants professeur invalides'});res.cookie('cetep_token',sign({id:t.id,teacher_no:t.teacher_no,role:'teacher'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/teacher'});}
@@ -489,7 +471,7 @@ doc.pipe(res);
 res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
 res.setHeader('Pragma','no-cache');
 res.setHeader('Expires','0');
-res.setHeader('X-CETEP-Certificate-Model','14.4.12');
+res.setHeader('X-CETEP-Certificate-Model','14.6.1-title-without-participation');
 
 const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
 
