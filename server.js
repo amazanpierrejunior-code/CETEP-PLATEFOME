@@ -528,6 +528,15 @@ app.post('/api/admin/results',auth,role('admin'),(req,res)=>{
 });
 app.post('/api/admin/certificates/:studentId/issue',auth,role('admin'),(req,res)=>{const sid=Number(req.params.studentId),s=db.prepare('SELECT id,program_id FROM students WHERE id=?').get(sid);if(!s)return res.status(404).json({error:'Étudiant introuvable'});const pid=Number(req.body.program_id||s.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(400).json({error:'Choisissez une formation inscrite au dossier étudiant.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(409).json({error:'Le certificat n’est pas encore éligible: réussite, 100% des leçons et frais confirmés sont requis.'});res.json({ok:true,certificate:cert});});
 app.get('/api/admin/certificates/:id/pdf',auth,role('admin'),(req,res)=>sendCertificatePdf(req,res,Number(req.params.id),true));
+app.put('/api/admin/certificates/:id/date',auth,role('admin'),(req,res)=>{
+  const id=Number(req.params.id);
+  const date=String(req.body.issued_at||'').trim();
+  if(!Number.isInteger(id)||id<1)return res.status(400).json({error:'Certificat invalide'});
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||Number.isNaN(Date.parse(date)))return res.status(400).json({error:'Date invalide. Format attendu : AAAA-MM-JJ'});
+  const result=db.prepare("UPDATE certificates SET issued_at=? WHERE id=?").run(date,id);
+  if(!result.changes)return res.status(404).json({error:'Certificat introuvable'});
+  res.json({ok:true});
+});
 app.get('/api/student/certificate',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({eligible:false,message:'Cette formation ne figure pas dans votre dossier.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).json({eligible:false,message:'Votre certificat sera disponible après réussite, 100% des leçons et paiement complet des frais.'});res.json({eligible:true,certificate:cert,download:'/api/student/certificate.pdf?program_id='+pid});});
 app.get('/api/student/certificate.pdf',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).send('Formation non autorisée');const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).send('Certificat non disponible');sendCertificatePdf(req,res,cert.id,false);});
 app.get('/api/certificates/verify/:number',(req,res)=>{
