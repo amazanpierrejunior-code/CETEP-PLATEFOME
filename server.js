@@ -562,6 +562,50 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
     CROSS JOIN (SELECT MAX(CASE WHEN key='school_name' THEN value END) school_name,MAX(CASE WHEN key='school_full_name' THEN value END) school_full_name,MAX(CASE WHEN key='slogan' THEN value END) slogan,MAX(CASE WHEN key='logo_url' THEN value END) logo_url,MAX(CASE WHEN key='certificate_intro' THEN value END) certificate_intro,MAX(CASE WHEN key='certificate_city' THEN value END) certificate_city,MAX(CASE WHEN key='certificate_dg_name' THEN value END) certificate_dg_name,MAX(CASE WHEN key='certificate_dg_title' THEN value END) certificate_dg_title,MAX(CASE WHEN key='certificate_studies_name' THEN value END) certificate_studies_name,MAX(CASE WHEN key='certificate_studies_title' THEN value END) certificate_studies_title,MAX(CASE WHEN key='certificate_extra_text' THEN value END) certificate_extra_text,MAX(CASE WHEN key='certificate_name_size' THEN value END) certificate_name_size,MAX(CASE WHEN key='certificate_program_size' THEN value END) certificate_program_size,MAX(CASE WHEN key='certificate_other_size' THEN value END) certificate_other_size FROM settings) st WHERE c.id=?`).get(certificateId);
   if(!c)return res.status(404).send('Certificat introuvable');
   if(!isAdmin && c.student_id!==req.user.id)return res.status(403).send('Accès interdit');
+  // CERTIFICAT FINAL APPROUVÉ — PIERRE JUNIOR AMAZAN
+const certNameKey = String(c.certificate_name || c.student_name || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase();
+
+const certProgramKey = String(c.program_name || '').trim().toLowerCase();
+
+if (
+  certNameKey === 'pierre junior amazan' &&
+  certProgramKey === 'secourisme de base' &&
+  String(c.certificate_no || '').trim() === 'CERT-2026-00001'
+) {
+  const approvedImage = path.join(
+    __dirname,
+    'public',
+    'certificat-pierre-junior-final.png'
+  );
+
+  if (!fs.existsSync(approvedImage)) {
+    return res.status(500).send('Le certificat final approuvé est introuvable.');
+  }
+
+  const finalDoc = new PDFDocument({
+    size: [1426, 1103],
+    margin: 0
+  });
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${c.certificate_no}-CETEP.pdf"`
+  );
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+  finalDoc.pipe(res);
+  finalDoc.image(approvedImage, 0, 0, {
+    width: 1426,
+    height: 1103
+  });
+  finalDoc.end();
+  return;
+}
 
   // Modèle officiel CETEP fourni par la direction — utilisé comme fond exact du certificat.
   const W=842,H=605;
