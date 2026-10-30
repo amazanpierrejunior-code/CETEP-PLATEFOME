@@ -583,13 +583,13 @@ const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.p
 if(fs.existsSync(model)){
   doc.image(model,0,0,{width:W,height:H});
 }
-// Masquer l'ancien libellé imprimé dans l'image et le replacer légèrement plus haut.
+// Nettoyer la zone centrale pour éviter les anciens textes en double.
 doc.save();
-doc.fillColor('#fff').opacity(0.96).rect(350,300,145,22).fill();
+doc.fillColor('#FFFFFF')
+   .opacity(1)
+   .rect(130, 275, 580, 175)
+   .fill();
 doc.restore();
-doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(13).text('Décerné à :',350,282,{width:145,align:'center',lineBreak:false});
-// Ne pas masquer le paragraphe officiel imprimé dans le modèle : il doit rester visible.
-// Seul le libellé « Décerné à : » est repositionné plus haut, comme demandé.
 
 
 /* =========================================================
@@ -645,51 +645,87 @@ const debut=dateText(startDate);
 const finFormation=dateText(endDate);
 const certificateIntro=String(c.certificate_intro||'').trim();
 const certificateExtra=String(c.certificate_extra_text||'').trim();
-if(certificateIntro){doc.fillColor('#222').font('Times-Roman').fontSize(Math.min(13,Math.max(8,Number(c.certificate_other_size)||12))).text(certificateIntro,185,405,{width:484,align:'center',lineBreak:false,ellipsis:true});}
-if(certificateExtra){doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(Math.min(12,Math.max(8,Number(c.certificate_other_size)||12))).text(certificateExtra,185,434,{width:484,align:'center',lineBreak:false,ellipsis:true});}
 
-/* Nom de l'étudiant — centré sur la première ligne */
+const nameSize=Math.min(24,Math.max(10,Number(c.certificate_name_size)||18));
+const programSize=Math.min(22,Math.max(10,Number(c.certificate_program_size)||16));
+const otherSize=Math.min(13,Math.max(9,Number(c.certificate_other_size)||11));
+
+/* Libellé */
+doc.fillColor('#1b1f3a')
+   .font('Times-Roman')
+   .fontSize(13)
+   .text('Décerné à :',145,282,{
+      width:560,
+      align:'center',
+      lineBreak:false
+   });
+
+/* Nom de l'étudiant */
 doc.fillColor('#1b1f3a')
    .font('Times-Bold')
-   .fontSize(Math.min(24,Math.max(8,Number(c.certificate_name_size)||15)))
-   .text(name,145,321,{
+   .fontSize(nameSize)
+   .text(name,145,306,{
       width:560,
       align:'center',
       lineBreak:false
    });
 
-/* Formation — centrée sur la deuxième ligne */
+/* Texte introductif */
+if(certificateIntro){
+  doc.fillColor('#222')
+     .font('Times-Roman')
+     .fontSize(otherSize)
+     .text(certificateIntro,155,342,{
+        width:540,
+        align:'center',
+        lineBreak:false,
+        ellipsis:true
+     });
+}
+
+/* Formation */
 doc.fillColor('#1b1f3a')
-   .font('Times-Roman')
-  .fontSize(Math.min(24,Math.max(8,Number(c.certificate_program_size)||15)))
-   .text(formation,145,380,{
+   .font('Times-Bold')
+   .fontSize(programSize)
+   .text(formation,145,370,{
       width:560,
       align:'center',
       lineBreak:false
    });
 
-/* Période de formation : dates saisies dans le dossier étudiant */
+/* Texte complémentaire */
+if(certificateExtra){
+  doc.fillColor('#222')
+     .font('Times-Roman')
+     .fontSize(otherSize)
+     .text(certificateExtra,155,397,{
+        width:540,
+        align:'center',
+        lineBreak:false,
+        ellipsis:true
+     });
+}
+
+/* Période de formation */
 doc.fillColor('#1b1f3a')
    .font('Helvetica')
-   .fontSize(Math.min(18,Math.max(8,Number(c.certificate_other_size)||12)))
-   .text(`Période de formation : du ${debut} au ${finFormation}`,180,420,{
-      width:480,
+   .fontSize(otherSize)
+   .text(`Période de formation : du ${debut} au ${finFormation}`,145,419,{
+      width:560,
       align:'center',
       lineBreak:false
    });
 
-/* Lieu de délivrance — valeur modifiable dans Administration > Certificats */
-doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(12).text(`Fait à ${String(c.certificate_city||'Carrefour')}, le`,300,448,{width:180,align:'right',lineBreak:false});
-/* Date de délivrance du certificat — distincte de la période de formation */
-doc.fillColor('#111')
+/* Date de délivrance */
+doc.fillColor('#1b1f3a')
    .font('Times-Roman')
-   .fontSize(Math.min(18,Math.max(8,Number(c.certificate_other_size)||12)))
-   .text(fin,485,448,{
-      width:125,
+   .fontSize(otherSize)
+   .text(`Fait à ${String(c.certificate_city||'Carrefour')}, le ${fin}`,145,439,{
+      width:560,
       align:'center',
       lineBreak:false
    });
-
+    
 /* =========================================================
    QR CODE — EN HAUT À DROITE
    ========================================================= */
