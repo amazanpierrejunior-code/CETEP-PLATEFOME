@@ -611,7 +611,9 @@ app.get('/api/certificates/verify/:number',(req,res)=>{
   res.json({valid:c.status==='Valide',...c});
 });
 app.get('/certificat/:number',(req,res)=>{
-  const no=String(req.params.number).replace(/[^A-Za-z0-9_-]/g,'');
+  const rawNo=String(req.params.number).replace(/[^A-Za-z0-9_-]/g,'');
+  const aliases={'CETEP-2026-00001':'CERT-2026-00001'};
+  const no=aliases[rawNo]||rawNo;
   const c=db.prepare(`SELECT c.certificate_no,c.issued_at,c.status,s.name student_name,p.name program_name,r.score
     FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id
     LEFT JOIN final_results r ON r.id=c.result_id WHERE c.certificate_no=?`).get(no);
