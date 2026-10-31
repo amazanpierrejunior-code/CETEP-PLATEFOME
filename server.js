@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.6.19-certificat-nom-et-mise-en-page-corriges';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.6.18-modeles-certificats-par-formation';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -636,7 +636,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
     }
   }
   // CERTIFICAT FINAL APPROUVÉ — PIERRE JUNIOR AMAZAN
-const certNameKey = String(c.certificate_name || c.student_name || '')
+const certNameKey = String(c.student_name || '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
   .trim()
@@ -704,7 +704,7 @@ if(fs.existsSync(model)){
 doc.save();
 doc.fillColor('#FFFFFF')
    .opacity(1)
-   .rect(130, 270, 580, 208)
+   .rect(130, 275, 580, 175)
    .fill();
 doc.restore();
 
@@ -729,7 +729,7 @@ doc.fillColor('#333').font('Times-Roman').fontSize(10).text(studiesTitle,455,560
    INFORMATIONS DYNAMIQUES
    ========================================================= */
 
-const name=(c.certificate_name||c.student_name||'').trim();
+const name=String(c.student_name||'').trim();
 const formation=(c.program_name||'Formation professionnelle').trim();
 
 const formatCertificateDate=value=>{
@@ -781,12 +781,10 @@ doc.fillColor('#1b1f3a')
 doc.fillColor('#1b1f3a')
    .font('Times-Bold')
    .fontSize(nameSize)
-   .text(name,145,307,{
+   .text(name,145,306,{
       width:560,
-      height:28,
       align:'center',
-      lineBreak:false,
-      ellipsis:true
+      lineBreak:false
    });
 
 /* Texte introductif */
@@ -794,11 +792,10 @@ if(certificateIntro){
   doc.fillColor('#222')
      .font('Times-Roman')
      .fontSize(otherSize)
-     .text(certificateIntro,155,340,{
+     .text(certificateIntro,155,342,{
         width:540,
-        height:38,
         align:'center',
-        lineGap:2,
+        lineBreak:false,
         ellipsis:true
      });
 }
@@ -807,12 +804,10 @@ if(certificateIntro){
 doc.fillColor('#1b1f3a')
    .font('Times-Bold')
    .fontSize(programSize)
-   .text(formation,145,381,{
+   .text(formation,145,370,{
       width:560,
-      height:25,
       align:'center',
-      lineBreak:false,
-      ellipsis:true
+      lineBreak:false
    });
 
 /* Texte complémentaire */
@@ -820,11 +815,10 @@ if(certificateExtra){
   doc.fillColor('#222')
      .font('Times-Roman')
      .fontSize(otherSize)
-     .text(certificateExtra,155,407,{
+     .text(certificateExtra,155,397,{
         width:540,
-        height:28,
         align:'center',
-        lineGap:2,
+        lineBreak:false,
         ellipsis:true
      });
 }
@@ -833,7 +827,7 @@ if(certificateExtra){
 doc.fillColor('#1b1f3a')
    .font('Helvetica')
    .fontSize(otherSize)
-   .text(`Période de formation : du ${debut} au ${finFormation}`,145,439,{ 
+   .text(`Période de formation : du ${debut} au ${finFormation}`,145,419,{
       width:560,
       align:'center',
       lineBreak:false
@@ -843,7 +837,7 @@ doc.fillColor('#1b1f3a')
 doc.fillColor('#1b1f3a')
    .font('Times-Roman')
    .fontSize(otherSize)
-   .text(`Fait à ${String(c.certificate_city||'Carrefour')}, le ${fin}`,145,458,{ 
+   .text(`Fait à ${String(c.certificate_city||'Carrefour')}, le ${fin}`,145,439,{
       width:560,
       align:'center',
       lineBreak:false
