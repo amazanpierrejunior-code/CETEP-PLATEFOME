@@ -418,7 +418,71 @@ app.post('/api/public/enrollment-payment',async (req,res)=>{try{
  }catch(e){res.status(400).json({error:e.message});}});
 app.post('/api/public/donation',async (req,res)=>{try{const b=req.body||{};if(!b.name||!b.method||!b.amount)return res.status(400).json({error:'Nom, méthode et montant obligatoires'});const r=db.prepare('INSERT INTO donations(name,email,amount,method,reference,message) VALUES(?,?,?,?,?,?)').run(b.name,b.email||'',Number(b.amount),b.method,b.reference||'',b.message||'');const emailNotification=await sendCETEPNotification('Nouveau soutien CETEP — '+r.lastInsertRowid,`<h2>Nouveau soutien reçu</h2><p><b>Nom :</b> ${escapeHtml(b.name)}</p><p><b>Email :</b> ${escapeHtml(b.email||'Non fourni')}</p><p><b>Montant :</b> ${Number(b.amount).toLocaleString('fr-FR')}</p><p><b>Méthode :</b> ${escapeHtml(b.method)}</p><p><b>Référence :</b> ${escapeHtml(b.reference||'Non fournie')}</p><p><b>Message :</b> ${escapeHtml(b.message||'')}</p><p><b>Date :</b> ${new Date().toLocaleString('fr-FR')}</p>`);res.status(201).json({ok:true,id:r.lastInsertRowid,email_notification:emailNotification,message:'Merci pour votre soutien. Votre contribution a été enregistrée et CETEP a reçu la notification.'});}catch(e){res.status(400).json({error:e.message});}});
 app.get('/api/admin/stats',auth,role('admin'),(req,res)=>res.json({students:db.prepare('SELECT COUNT(*) c FROM students').get().c,activeStudents:db.prepare("SELECT COUNT(DISTINCT student_id) c FROM enrollments WHERE access_enabled=1 AND status='Actif'").get().c,teachers:db.prepare('SELECT COUNT(*) c FROM teachers').get().c,programs:db.prepare('SELECT COUNT(*) c FROM programs WHERE active=1').get().c,pending:db.prepare("SELECT COUNT(*) c FROM enrollments WHERE status='En attente'").get().c,revenue:db.prepare("SELECT COALESCE(SUM(amount_htg),0) s FROM payments WHERE status='Confirmé'").get().s,donations:db.prepare("SELECT COALESCE(SUM(amount),0) s FROM donations WHERE status!='Refusé'").get().s}));
-app.get('/api/admin/settings',auth,role('admin'),(req,res)=>res.json(settings()));app.put('/api/admin/settings',auth,role('admin'),(req,res)=>{const q=db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');for(const k of Object.keys(defaults))if(req.body[k]!==undefined)q.run(k,String(req.body[k]));res.json({ok:true,settings:settings()});});app.post('/api/admin/logo/reset',auth,role('admin'),(req,res)=>{db.prepare("UPDATE settings SET value='' WHERE key='logo_url'").run();res.json({ok:true});});
+app.get('/api/admin/settings',auth,role('admin'),(req,res)=>res.json(settings())); // Modèles de certificats personnalisés par formation CETEP
+const programCertificateFields = [
+  'certificate_intro',
+  'certificate_city',
+  'certificate_dg_name',
+  'certificate_dg_title',
+  'certificate_studies_name',
+  'certificate_studies_title',
+  'certificate_extra_text',
+  'certificate_name_size',
+  'certificate_program_size',
+  'certificate_other_size'
+];
+
+app.get('/api/admin/programs/:id/certificate-template',auth,role('admin'),(req,res)=>{
+  const programId=Number(req.params.id);
+
+  if(!Number.isInteger(programId)||programId<1)
+    return res.status(400).json({error:'Formation invalide'});
+
+  const program=db.prepare('SELECT id,name FROM programs WHERE id=?').get(programId);
+
+  if(!program)
+    return res.status(404).json({error:'Formation introuvable'});
+
+  const prefix=`certificate_program_${programId}_`;
+  const rows=db.prepare('SELECT key,value FROM settings WHERE key LIKE ?').all(prefix+'%');
+  const saved=Object.fromEntries(rows.map(row=>[row.key.slice(prefix.length),row.value]));
+
+  const globalSettings=settings();
+  const template={};
+
+  for(const field of programCertificateFields){
+    template[field]=saved[field]!==undefined && saved[field]!=='' 
+      ? saved[field]
+      : (globalSettings[field]||'');
+  }
+
+  res.json({ok:true,program,template});
+});
+
+app.put('/api/admin/programs/:id/certificate-template',auth,role('admin'),(req,res)=>{
+  const programId=Number(req.params.id);
+
+  if(!Number.isInteger(programId)||programId<1)
+    return res.status(400).json({error:'Formation invalide'});
+
+  if(!db.prepare('SELECT id FROM programs WHERE id=?').get(programId))
+    return res.status(404).json({error:'Formation introuvable'});
+
+  const body=req.body||{};
+  const save=db.prepare(`
+    INSERT INTO settings(key,value) VALUES(?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value
+  `);
+
+  for(const field of programCertificateFields){
+    if(body[field]!==undefined){
+      const value=String(body[field]).slice(0,3000);
+      save.run(`certificate_program_${programId}_${field}`,value);
+    }
+  }
+
+  res.json({ok:true,message:'Modèle de certificat de cette formation enregistré.'});
+}); app.put('/api/admin/settings',auth,role('admin'),(req,res)=>{const q=db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');for(const k of Object.keys(defaults))if(req.body[k]!==undefined)q.run(k,String(req.body[k]));res.json({ok:true,settings:settings()});});app.post('/api/admin/logo/reset',auth,role('admin'),(req,res)=>{db.prepare("UPDATE settings SET value='' WHERE key='logo_url'").run();res.json({ok:true});});
 app.get('/api/admin/students',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT s.*,p.name program_name,e.start_date,e.end_date FROM students s LEFT JOIN programs p ON p.id=s.program_id LEFT JOIN enrollments e ON e.student_id=s.id AND e.program_id=s.program_id ORDER BY s.id DESC').all()));
 app.post('/api/admin/students',auth,role('admin'),(req,res)=>{try{const b=req.body;const nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(!b.name||!b.phone||!b.program_id)return res.status(400).json({error:'Nom, téléphone et formation obligatoires'});if(!nif&&!cin)return res.status(400).json({error:'NIF ou CIN obligatoire pour identifier l’étudiant.'});if(nif&&db.prepare('SELECT id FROM students WHERE nif=? LIMIT 1').get(nif))return res.status(409).json({error:'Ce NIF existe déjà.'});if(cin&&db.prepare('SELECT id FROM students WHERE cin=? LIMIT 1').get(cin))return res.status(409).json({error:'Ce CIN existe déjà.'});const suppliedPassword=String(b.password||'');if(suppliedPassword&&!passwordIsStrong(suppliedPassword))return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});const temporaryPassword=suppliedPassword?'':generateTemporaryPassword();const pw=suppliedPassword||temporaryPassword;const no=String(b.student_no||'').trim().toUpperCase()||nextNo('CETEP','students','student_no');if(!/^[A-Z0-9][A-Z0-9._-]{2,39}$/.test(no))return res.status(400).json({error:'Code étudiant invalide : utilisez 3 à 40 caractères (lettres, chiffres, tiret, point ou underscore).'});if(db.prepare('SELECT 1 FROM students WHERE student_no=?').get(no))return res.status(409).json({error:'Ce code étudiant existe déjà.'});const r=db.prepare(`INSERT INTO students(student_no,name,birth_date,birth_place,phone,email,nif,cin,program_id,education,blood_group,responsible_person,marital_status,status,password_hash,access_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(no,b.name,b.birth_date||null,b.birth_place||null,b.phone,b.email||null,nif||null,cin||null,Number(b.program_id),b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.status||'Actif',bcrypt.hashSync(pw,12),b.access_enabled===false?0:1);db.prepare('INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,?,?,?,?,?)').run(r.lastInsertRowid,Number(b.program_id),b.access_enabled===false?'En attente':'Actif',b.access_enabled===false?0:1,b.access_enabled===false?0:1,b.start_date||null,b.end_date||null);res.status(201).json({ok:true,id:r.lastInsertRowid,student_no:no,...(temporaryPassword?{temporary_password:temporaryPassword}:{})});}catch(e){if(String(e.message).includes('UNIQUE constraint failed: students.nif'))return res.status(409).json({error:'Ce NIF existe déjà.'});if(String(e.message).includes('UNIQUE constraint failed: students.cin'))return res.status(409).json({error:'Ce CIN existe déjà.'});res.status(400).json({error:e.message});}});
 app.put('/api/admin/students/:id',auth,role('admin'),async (req,res)=>{try{const id=Number(req.params.id);const before=db.prepare('SELECT * FROM students WHERE id=?').get(id);if(!before)return res.status(404).json({error:'Étudiant introuvable'});const b=req.body||{};const code=String(b.student_no??before.student_no).trim().toUpperCase();if(!/^[A-Z0-9][A-Z0-9._-]{2,39}$/.test(code))return res.status(400).json({error:'Code étudiant invalide.'});if(db.prepare('SELECT 1 FROM students WHERE student_no=? AND id<>?').get(code,id))return res.status(409).json({error:'Ce code étudiant appartient déjà à un autre étudiant.'});const nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(nif&&db.prepare('SELECT 1 FROM students WHERE nif=? AND id<>?').get(nif,id))return res.status(409).json({error:'Ce NIF est déjà enregistré.'});if(cin&&db.prepare('SELECT 1 FROM students WHERE cin=? AND id<>?').get(cin,id))return res.status(409).json({error:'Ce CIN est déjà enregistré.'});const tx=db.transaction(()=>{db.prepare(`UPDATE students SET student_no=?,name=?,birth_date=?,birth_place=?,phone=?,email=?,nif=?,cin=?,program_id=?,education=?,blood_group=?,responsible_person=?,marital_status=?,certificate_name=? WHERE id=?`).run(code,b.name??before.name,b.birth_date||null,b.birth_place||null,b.phone||null,b.email||null,nif||null,cin||null,Number(b.program_id||before.program_id)||null,b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.certificate_name||null,id);const pid=Number(b.program_id||before.program_id||0);if(pid){db.prepare('INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,?,?,?,?,?)').run(id,pid,b.status||before.status||'Actif',Number(before.access_enabled||0),1,b.start_date||null,b.end_date||null);db.prepare('UPDATE enrollments SET start_date=?,end_date=? WHERE student_id=? AND program_id=?').run(b.start_date||null,b.end_date||null,id,pid);db.prepare('UPDATE students SET program_id=? WHERE id=?').run(pid,id);}});tx();res.json({ok:true,message:'Dossier étudiant mis à jour.'});}catch(e){if(String(e.message).includes('students.nif'))return res.status(409).json({error:'Ce NIF est déjà enregistré.'});if(String(e.message).includes('students.cin'))return res.status(409).json({error:'Ce CIN est déjà enregistré.'});res.status(400).json({error:e.message});}});
