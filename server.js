@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.6.16-certificat-label-adjusted';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.6.19-certificat-nom-et-mise-en-page-corriges';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -611,9 +611,7 @@ app.get('/api/certificates/verify/:number',(req,res)=>{
   res.json({valid:c.status==='Valide',...c});
 });
 app.get('/certificat/:number',(req,res)=>{
-  const rawNo=String(req.params.number).replace(/[^A-Za-z0-9_-]/g,'');
-  const aliases={'CETEP-2026-00001':'CERT-2026-00001'};
-  const no=aliases[rawNo]||rawNo;
+  const no=String(req.params.number).replace(/[^A-Za-z0-9_-]/g,'');
   const c=db.prepare(`SELECT c.certificate_no,c.issued_at,c.status,s.name student_name,p.name program_name,r.score
     FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id
     LEFT JOIN final_results r ON r.id=c.result_id WHERE c.certificate_no=?`).get(no);
@@ -621,13 +619,22 @@ app.get('/certificat/:number',(req,res)=>{
   res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CETEP — Vérification du certificat</title><body style="font-family:Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px"><h1>CETEP</h1><h2>Vérification du certificat</h2><p><b>N° :</b> ${c.certificate_no}</p><p><b>Étudiant :</b> ${String(c.student_name).replace(/[<>&"]/g,'')}</p><p><b>Formation :</b> ${String(c.program_name).replace(/[<>&"]/g,'')}</p><p><b>Résultat :</b> ${Number(c.score||0).toFixed(1)}/100</p><p><b>Statut :</b> ${c.status==='Valide'?'CERTIFICAT VALIDE':'CERTIFICAT NON VALIDE'}</p><p><b>Délivré le :</b> ${new Date(c.issued_at).toLocaleDateString('fr-FR')}</p><a href="/api/certificates/verify/${encodeURIComponent(c.certificate_no)}">Voir les données de vérification</a></body>`);
 });
 async function sendCertificatePdf(req,res,certificateId,isAdmin){
-  const c=db.prepare(`SELECT c.*,s.name student_name,COALESCE(s.certificate_name,s.name) certificate_name,p.name program_name,
+  const c=db.prepare(`SELECT c.*,s.name student_name,s.name certificate_name,p.name program_name,
     p.duration,e.enrolled_at,e.start_date,e.end_date,r.score,r.pass_mark,st.school_name,st.school_full_name,st.slogan,st.logo_url
     FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id
     LEFT JOIN final_results r ON r.id=c.result_id LEFT JOIN enrollments e ON e.student_id=c.student_id AND e.program_id=c.program_id
     CROSS JOIN (SELECT MAX(CASE WHEN key='school_name' THEN value END) school_name,MAX(CASE WHEN key='school_full_name' THEN value END) school_full_name,MAX(CASE WHEN key='slogan' THEN value END) slogan,MAX(CASE WHEN key='logo_url' THEN value END) logo_url,MAX(CASE WHEN key='certificate_intro' THEN value END) certificate_intro,MAX(CASE WHEN key='certificate_city' THEN value END) certificate_city,MAX(CASE WHEN key='certificate_dg_name' THEN value END) certificate_dg_name,MAX(CASE WHEN key='certificate_dg_title' THEN value END) certificate_dg_title,MAX(CASE WHEN key='certificate_studies_name' THEN value END) certificate_studies_name,MAX(CASE WHEN key='certificate_studies_title' THEN value END) certificate_studies_title,MAX(CASE WHEN key='certificate_extra_text' THEN value END) certificate_extra_text,MAX(CASE WHEN key='certificate_name_size' THEN value END) certificate_name_size,MAX(CASE WHEN key='certificate_program_size' THEN value END) certificate_program_size,MAX(CASE WHEN key='certificate_other_size' THEN value END) certificate_other_size FROM settings) st WHERE c.id=?`).get(certificateId);
   if(!c)return res.status(404).send('Certificat introuvable');
   if(!isAdmin && c.student_id!==req.user.id)return res.status(403).send('Accès interdit');
+  // Appliquer les réglages propres à la formation; les valeurs globales restent le repli.
+  const programTemplatePrefix=`certificate_program_${c.program_id}_`;
+  const programTemplateRows=db.prepare('SELECT key,value FROM settings WHERE key LIKE ?').all(programTemplatePrefix+'%');
+  for(const row of programTemplateRows){
+    const field=row.key.slice(programTemplatePrefix.length);
+    if(programCertificateFields.includes(field) && row.value!==undefined && row.value!==''){
+      c[field]=row.value;
+    }
+  }
   // CERTIFICAT FINAL APPROUVÉ — PIERRE JUNIOR AMAZAN
 const certNameKey = String(c.certificate_name || c.student_name || '')
   .normalize('NFD')
@@ -697,7 +704,7 @@ if(fs.existsSync(model)){
 doc.save();
 doc.fillColor('#FFFFFF')
    .opacity(1)
-   .rect(130, 275, 580, 175)
+   .rect(130, 270, 580, 208)
    .fill();
 doc.restore();
 
@@ -774,10 +781,12 @@ doc.fillColor('#1b1f3a')
 doc.fillColor('#1b1f3a')
    .font('Times-Bold')
    .fontSize(nameSize)
-   .text(name,145,306,{
+   .text(name,145,307,{
       width:560,
+      height:28,
       align:'center',
-      lineBreak:false
+      lineBreak:false,
+      ellipsis:true
    });
 
 /* Texte introductif */
@@ -785,10 +794,11 @@ if(certificateIntro){
   doc.fillColor('#222')
      .font('Times-Roman')
      .fontSize(otherSize)
-     .text(certificateIntro,155,342,{
+     .text(certificateIntro,155,340,{
         width:540,
+        height:38,
         align:'center',
-        lineBreak:false,
+        lineGap:2,
         ellipsis:true
      });
 }
@@ -797,10 +807,12 @@ if(certificateIntro){
 doc.fillColor('#1b1f3a')
    .font('Times-Bold')
    .fontSize(programSize)
-   .text(formation,145,370,{
+   .text(formation,145,381,{
       width:560,
+      height:25,
       align:'center',
-      lineBreak:false
+      lineBreak:false,
+      ellipsis:true
    });
 
 /* Texte complémentaire */
@@ -808,10 +820,11 @@ if(certificateExtra){
   doc.fillColor('#222')
      .font('Times-Roman')
      .fontSize(otherSize)
-     .text(certificateExtra,155,397,{
+     .text(certificateExtra,155,407,{
         width:540,
+        height:28,
         align:'center',
-        lineBreak:false,
+        lineGap:2,
         ellipsis:true
      });
 }
@@ -820,7 +833,7 @@ if(certificateExtra){
 doc.fillColor('#1b1f3a')
    .font('Helvetica')
    .fontSize(otherSize)
-   .text(`Période de formation : du ${debut} au ${finFormation}`,145,419,{
+   .text(`Période de formation : du ${debut} au ${finFormation}`,145,439,{ 
       width:560,
       align:'center',
       lineBreak:false
@@ -830,7 +843,7 @@ doc.fillColor('#1b1f3a')
 doc.fillColor('#1b1f3a')
    .font('Times-Roman')
    .fontSize(otherSize)
-   .text(`Fait à ${String(c.certificate_city||'Carrefour')}, le ${fin}`,145,439,{
+   .text(`Fait à ${String(c.certificate_city||'Carrefour')}, le ${fin}`,145,458,{ 
       width:560,
       align:'center',
       lineBreak:false
