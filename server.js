@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.7.2-certificats-textes-par-formation';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.7.3-certificats-controle-lecons-paiements';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -343,12 +343,15 @@ function certificateNo(){
 function completionStats(studentId,programId){
   const total=db.prepare(`SELECT COUNT(*) c FROM modules m JOIN lessons l ON l.module_id=m.id WHERE m.program_id=? AND m.active=1 AND l.active=1`).get(programId).c;
   const done=db.prepare(`SELECT COUNT(*) c FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id JOIN modules m ON m.id=l.module_id WHERE lp.student_id=? AND m.program_id=? AND m.active=1 AND l.active=1 AND lp.completed=1`).get(studentId,programId).c;
-  return {total,done,percent:total?Math.round(done*100/total):100};
+  // Aucun contenu publié ne signifie PAS que l'étudiant a terminé la formation.
+  // Il faut au moins une leçon active publiée et toutes ces leçons terminées.
+  return {total,done,percent:total>0?Math.min(100,Math.round(done*100/total)):0};
 }
 function paymentStats(studentId,programId){
-  const due=Number(db.prepare('SELECT COALESCE(price_htg,0) price_htg FROM programs WHERE id=?').get(programId)?.price_htg||0);
+  const due=Number(db.prepare('SELECT price_htg FROM programs WHERE id=?').get(programId)?.price_htg||0);
   const paid=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) paid FROM payments WHERE student_id=? AND program_id=? AND status='Confirmé' AND (payment_category IS NULL OR payment_category IN ('Mensualité','Trimestriel'))").get(studentId,programId)?.paid||0);
-  return {due,paid,fullyPaid:due<=0||paid>=due};
+  // Une formation sans tarif défini (0 ou négatif) n'est jamais considérée payée automatiquement.
+  return {due,paid,fullyPaid:due>0 && paid>=due};
 }
 function refreshStudentCourseAccess(studentId,programId){
   if(!studentId||!programId)return false;
