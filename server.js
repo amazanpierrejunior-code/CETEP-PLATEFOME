@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.7.5-certificat-officiel-mise-en-page-fix';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.7.6-modele-officiel-qr-individuel';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -418,7 +418,7 @@ app.get('/health',async(req,res)=>{
   res.status(status.ok?200:503).json(status);
 });
 function sendPage(res,file){const pub=path.join(__dirname,'public',file);const root=path.join(__dirname,file);if(fs.existsSync(pub))return res.sendFile(pub);if(fs.existsSync(root))return res.sendFile(root);return res.status(404).send('Page introuvable: '+file);}
-app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-2026-clean-template.png',certificate_model_version:'14.4.9-exact-template',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.4.8-official-exact-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/secretariat',(req,res)=>sendPage(res,'secretary.html'));app.get('/secretary',(req,res)=>res.redirect('/secretariat'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
+app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-modele-officiel-dynamique.png',certificate_model_version:'14.7.6-modele-officiel-qr-individuel',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.4.8-official-exact-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/secretariat',(req,res)=>sendPage(res,'secretary.html'));app.get('/secretary',(req,res)=>res.redirect('/secretariat'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
 function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||a.role!=='admin'||Number(a.active)!==1||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
 function secretaryLogin(req,res){const a=db.prepare("SELECT * FROM admins WHERE email=? AND role='secretary' AND active=1").get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants secrétariat invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'secretary'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/secretariat'});}
 app.post('/api/secretary/login',secretaryLogin);
@@ -657,156 +657,87 @@ app.get('/certificat/:number',(req,res)=>{
   res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CETEP — Vérification du certificat</title><body style="font-family:Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px"><h1>CETEP</h1><h2>Vérification du certificat</h2><p><b>N° :</b> ${c.certificate_no}</p><p><b>Étudiant :</b> ${String(c.student_name).replace(/[<>&"]/g,'')}</p><p><b>Formation :</b> ${String(c.program_name).replace(/[<>&"]/g,'')}</p><p><b>Résultat :</b> ${Number(c.score||0).toFixed(1)}/100</p><p><b>Statut :</b> ${c.status==='Valide'?'CERTIFICAT VALIDE':'CERTIFICAT NON VALIDE'}</p><p><b>Délivré le :</b> ${new Date(c.issued_at).toLocaleDateString('fr-FR')}</p><a href="/api/certificates/verify/${encodeURIComponent(c.certificate_no)}">Voir les données de vérification</a></body>`);
 });
 async function sendCertificatePdf(req,res,certificateId,isAdmin){
-  const c=db.prepare(`SELECT c.*,s.name student_name,COALESCE(s.certificate_name,s.name) certificate_name,p.name program_name,
-    p.duration,e.enrolled_at,e.start_date,e.end_date,r.score,r.pass_mark,cpt.intro certificate_program_intro,cpt.extra_text certificate_program_extra_text,st.school_name,st.school_full_name,st.slogan,st.logo_url
+  const c=db.prepare(`SELECT c.*,s.name student_name,COALESCE(s.certificate_name,s.name) certificate_name,
+    p.name program_name,p.duration,e.enrolled_at,e.start_date,e.end_date,r.score,r.pass_mark,
+    cpt.intro certificate_program_intro,cpt.extra_text certificate_program_extra_text,
+    st.school_name,st.school_full_name,st.slogan,st.logo_url,st.certificate_city,
+    st.certificate_extra_text,st.certificate_other_size
     FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id
-    LEFT JOIN final_results r ON r.id=c.result_id LEFT JOIN enrollments e ON e.student_id=c.student_id AND e.program_id=c.program_id LEFT JOIN certificate_program_texts cpt ON cpt.program_id=c.program_id
-    CROSS JOIN (SELECT MAX(CASE WHEN key='school_name' THEN value END) school_name,MAX(CASE WHEN key='school_full_name' THEN value END) school_full_name,MAX(CASE WHEN key='slogan' THEN value END) slogan,MAX(CASE WHEN key='logo_url' THEN value END) logo_url,MAX(CASE WHEN key='certificate_intro' THEN value END) certificate_intro,MAX(CASE WHEN key='certificate_city' THEN value END) certificate_city,MAX(CASE WHEN key='certificate_dg_name' THEN value END) certificate_dg_name,MAX(CASE WHEN key='certificate_dg_title' THEN value END) certificate_dg_title,MAX(CASE WHEN key='certificate_studies_name' THEN value END) certificate_studies_name,MAX(CASE WHEN key='certificate_studies_title' THEN value END) certificate_studies_title,MAX(CASE WHEN key='certificate_extra_text' THEN value END) certificate_extra_text,MAX(CASE WHEN key='certificate_name_size' THEN value END) certificate_name_size,MAX(CASE WHEN key='certificate_program_size' THEN value END) certificate_program_size,MAX(CASE WHEN key='certificate_other_size' THEN value END) certificate_other_size FROM settings) st WHERE c.id=?`).get(certificateId);
+    LEFT JOIN final_results r ON r.id=c.result_id
+    LEFT JOIN enrollments e ON e.student_id=c.student_id AND e.program_id=c.program_id
+    LEFT JOIN certificate_program_texts cpt ON cpt.program_id=c.program_id
+    CROSS JOIN (SELECT MAX(CASE WHEN key='school_name' THEN value END) school_name,
+      MAX(CASE WHEN key='school_full_name' THEN value END) school_full_name,
+      MAX(CASE WHEN key='slogan' THEN value END) slogan,MAX(CASE WHEN key='logo_url' THEN value END) logo_url,
+      MAX(CASE WHEN key='certificate_city' THEN value END) certificate_city,
+      MAX(CASE WHEN key='certificate_extra_text' THEN value END) certificate_extra_text,
+      MAX(CASE WHEN key='certificate_other_size' THEN value END) certificate_other_size FROM settings) st
+    WHERE c.id=?`).get(certificateId);
   if(!c)return res.status(404).send('Certificat introuvable');
   if(!isAdmin && c.student_id!==req.user.id)return res.status(403).send('Accès interdit');
 
-  // Modèle officiel CETEP : le fond contient déjà les libellés, lignes pointillées,
-  // le texte institutionnel, le sceau et les zones de signatures. Ne pas les masquer.
-  const W=842,H=605;
+  // Modèle officiel CETEP approuvé : décorations, signatures, logos et sceau conservés.
+  // Le fond est au format 1422x1106; le PDF conserve exactement le même ratio.
+  const W=842,H=655;
   const doc=new PDFDocument({size:[W,H],margin:0});
   res.setHeader('Content-Type','application/pdf');
   res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
   res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
-  res.setHeader('Pragma','no-cache');
-  res.setHeader('Expires','0');
-  res.setHeader('X-CETEP-Certificate-Model','14.7.4-official-template-aligned');
+  res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');
+  res.setHeader('X-CETEP-Certificate-Model','14.7.6-modele-officiel-qr-individuel');
   doc.pipe(res);
+  const model=path.join(__dirname,'public','certificat-cetep-modele-officiel-dynamique.png');
+  if(!fs.existsSync(model)){doc.end();return res.status(500).send('Modèle officiel CETEP introuvable.');}
+  doc.image(model,0,0,{width:W,height:H});
 
-  const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
-  if(fs.existsSync(model)) doc.image(model,0,0,{width:W,height:H});
-
-  const sigDG=path.join(__dirname,'public','signature-dg-livenson-fleuriot.png');
-  const sigWJ=path.join(__dirname,'public','signature-wilio-joseph.png');
-  if(fs.existsSync(sigDG)) doc.image(sigDG,205,476,{fit:[100,42],align:'center',valign:'center'});
-  if(fs.existsSync(sigWJ)) doc.image(sigWJ,515,476,{fit:[100,42],align:'center',valign:'center'});
-  const dgName=String(c.certificate_dg_name||'Agronome Livenson Fleuriot');
-  const dgTitle=String(c.certificate_dg_title||'Directeur Général');
-  const studiesName=String(c.certificate_studies_name||'Wilio Joseph');
-  const studiesTitle=String(c.certificate_studies_title||'Directeur des Études');
-  doc.fillColor('#111').font('Times-Bold').fontSize(9).text(dgName,155,528,{width:190,align:'center',lineBreak:false});
-  doc.fillColor('#333').font('Times-Roman').fontSize(9).text(dgTitle,155,544,{width:190,align:'center',lineBreak:false});
-  doc.fillColor('#111').font('Times-Bold').fontSize(9).text(studiesName,495,528,{width:190,align:'center',lineBreak:false});
-  doc.fillColor('#333').font('Times-Roman').fontSize(9).text(studiesTitle,495,544,{width:190,align:'center',lineBreak:false});
-
-  const name=(c.certificate_name||c.student_name||'').trim();
-  const formation=(c.program_name||'Formation professionnelle').trim();
-  const formatCertificateDate=value=>{
-    if(!value)return '—';
-    const raw=String(value).slice(0,10);
-    const iso=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if(iso)return `${iso[3]}/${iso[2]}/${iso[1]}`;
-    const d=new Date(value);
-    return Number.isNaN(d.getTime())?'—':d.toLocaleDateString('fr-FR');
+  const safeSize=(v,d,min,max)=>Math.max(min,Math.min(max,Number(v)||d));
+  const name=String(c.certificate_name||c.student_name||'').trim();
+  const formation=String(c.program_name||'Formation professionnelle').trim();
+  const lower=formation.toLowerCase();
+  const defaultsForProgram=()=>{
+    if(lower.includes('secourisme'))return 'Cette formation lui a permis d’acquérir les connaissances et les compétences nécessaires pour intervenir efficacement en situation d’urgence et contribuer à la sécurité et au bien-être de la communauté.';
+    if(lower.includes('électricité')||lower.includes('electricite'))return 'Cette formation lui a permis d’acquérir les compétences nécessaires à l’installation, au raccordement, à l’entretien et au dépannage des équipements électriques des bâtiments, dans le respect des normes et des règles de sécurité.';
+    if(lower.includes('plomberie'))return 'Cette formation lui a permis d’acquérir les compétences nécessaires à l’installation, à l’entretien et à la réparation des réseaux et équipements de plomberie, dans le respect des règles techniques et de sécurité.';
+    if(lower.includes('aide-soignant')||lower.includes('aide soignant'))return 'Cette formation lui a permis d’acquérir les connaissances et les compétences nécessaires pour assister les patients dans les soins quotidiens, contribuer à leur confort et respecter les règles d’hygiène et de sécurité.';
+    if(lower.includes('sérigraph')||lower.includes('serigraph'))return 'Cette formation lui a permis de maîtriser les techniques de préparation, de création et d’impression en sérigraphie, ainsi que l’utilisation sécuritaire des équipements et des matériaux.';
+    if(lower.includes('carrelage'))return 'Cette formation lui a permis d’acquérir les compétences nécessaires à la préparation des surfaces, à la pose et à la finition des revêtements en carrelage, selon les règles de qualité et de sécurité.';
+    return `Cette formation lui a permis d’acquérir les connaissances théoriques et les compétences pratiques nécessaires dans le domaine de ${formation}, conformément aux objectifs pédagogiques du CETEP.`;
   };
-  const dateDelivrance=formatCertificateDate(c.issued_at);
-  const rawStart=c.start_date||c.enrolled_at||null;
-  const parseDate=value=>{
-    if(!value)return null;
-    const raw=String(value).slice(0,10);
-    const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if(m){const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));return Number.isNaN(d.getTime())?null:d;}
-    const d=new Date(value);return Number.isNaN(d.getTime())?null:d;
-  };
-  const startDate=parseDate(rawStart);
-  let endDate=parseDate(c.end_date);
-  if(!endDate&&startDate){
-    const durationMatch=String(c.duration||'').match(/(\d+)\s*(?:mois|month|months)/i);
-    if(durationMatch){endDate=new Date(startDate);endDate.setMonth(endDate.getMonth()+Number(durationMatch[1]));}
-  }
-  const dateText=d=>d?formatCertificateDate(d.toISOString().slice(0,10)):'Non renseignée';
-  const debut=dateText(startDate), finFormation=dateText(endDate);
-  const intro=String(c.certificate_program_intro||c.certificate_intro||'').trim();
-  const extra=String(c.certificate_program_extra_text??c.certificate_extra_text??'').trim();
-  const safeSize=(value,fallback,min,max)=>Math.min(max,Math.max(min,Number(value)||fallback));
+  const intro=String(c.certificate_program_intro||defaultsForProgram()).trim();
+  const extra=String(c.certificate_program_extra_text||c.certificate_extra_text||'').trim();
+  const fmt=value=>{if(!value)return 'Non renseignée';const raw=String(value).slice(0,10);const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);if(m)return `${m[3]}/${m[2]}/${m[1]}`;const d=new Date(value);return Number.isNaN(d.getTime())?'Non renseignée':d.toLocaleDateString('fr-FR');};
+  const parse=value=>{if(!value)return null;const raw=String(value).slice(0,10);const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);if(m)return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));const d=new Date(value);return Number.isNaN(d.getTime())?null:d;};
+  const start=parse(c.start_date||c.enrolled_at);let finish=parse(c.end_date);
+  if(!finish&&start){const dm=String(c.duration||'').match(/(\d+)\s*(?:mois|month|months)/i);if(dm){finish=new Date(start);finish.setMonth(finish.getMonth()+Number(dm[1]));}}
+  const issued=fmt(c.issued_at);
+  const period=`Période de formation : du ${fmt(start)} au ${fmt(finish)}`;
+  const city=String(c.certificate_city||'Carrefour');
+  const otherSize=safeSize(c.certificate_other_size,12,9,13);
 
-  // Le nom est centré sur la première ligne pointillée du modèle original.
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(safeSize(c.certificate_name_size,15,10,20))
-    .text(name,125,333,{width:592,height:25,align:'center',lineBreak:false,ellipsis:true});
-  // La formation occupe la deuxième ligne pointillée, sans déplacer les libellés imprimés.
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(safeSize(c.certificate_program_size,15,10,20))
-    .text(formation,125,384,{width:592,height:24,align:'center',lineBreak:false,ellipsis:true});
-
-  // Zone de description : deux lignes maximum dans l'espace imprimé du modèle.
-  // La période est placée séparément sous le paragraphe pour éviter tout chevauchement.
-  const descText=[intro,extra].filter(Boolean).join(' ');
-  if(descText){
-    const descX=184, descY=408, descW=474, descH=27;
-    let descSize=Math.min(9, safeSize(c.certificate_other_size,9,8,10));
-    doc.font('Times-Roman');
-    while(descSize>7.2 && doc.fontSize(descSize).heightOfString(descText,{width:descW,align:'center',lineGap:0})>descH){
-      descSize-=0.3;
-    }
-    doc.fillColor('#222').font('Times-Roman').fontSize(descSize)
-      .text(descText,descX,descY,{width:descW,height:descH,align:'center',lineGap:0,ellipsis:true});
-  }
-  if(startDate||endDate){
-    doc.fillColor('#333').font('Times-Roman').fontSize(8)
-      .text(`Période de formation : du ${debut} au ${finFormation}`,184,438,{width:474,height:11,align:'center',lineBreak:false,ellipsis:true});
-  }
-
-  // La date remplace uniquement les pointillés après « Fait à Carrefour, le ».
+  // Les zones blanches du modèle ont été prévues pour ces champs dynamiques.
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(safeSize(c.certificate_name_size,22,12,25))
+    .text(name,225,300,{width:392,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(safeSize(c.certificate_program_size,21,12,24))
+    .text(formation,230,355,{width:382,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(otherSize)
+    .text(intro,190,390,{width:462,align:'center',lineGap:2});
+  if(extra)doc.fillColor('#101b45').font('Times-Roman').fontSize(Math.max(9,otherSize-1))
+    .text(extra,195,430,{width:452,align:'center',lineGap:1});
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(10.5)
+    .text(period,178,463,{width:490,align:'center',lineBreak:false,ellipsis:true});
   doc.fillColor('#101b45').font('Times-Roman').fontSize(11)
-    .text(dateDelivrance,485,458,{width:130,height:18,align:'center',lineBreak:false});
+    .text(`Fait à ${city}, le ${issued}`,280,493,{width:285,align:'center',lineBreak:false,ellipsis:true});
 
-/* =========================================================
-   QR CODE — EN HAUT À DROITE
-   ========================================================= */
-
-const verifyUrl=
-  `${process.env.PUBLIC_BASE_URL||''}/certificat/${encodeURIComponent(c.certificate_no)}`;
-
-const qrData=await QRCode.toDataURL(
-  verifyUrl,
-  {
-    margin:0,
-    width:120,
-    color:{
-      dark:'#111111',
-      light:'#ffffff'
-    }
-  }
-);
-
-const qrBuf=Buffer.from(
-  qrData.split(',')[1],
-  'base64'
-);
-
-/* QR ne couvre ni le sceau ni les signatures */
-doc.image(qrBuf,715,28,{
-  width:72,
-  height:72
-});
-
-/* Numéro du certificat sous le QR */
-doc.fillColor('#1b1f3a')
-   .font('Helvetica-Bold')
-   .fontSize(8)
-   .text(`N° ${c.certificate_no}`,690,103,{
-      width:120,
-      align:'center',
-      lineBreak:false
-   });
-
-doc.end();
+  // QR code individuel: chaque certificat renvoie vers sa propre page de vérification.
+  const base=(process.env.PUBLIC_BASE_URL||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');
+  const verifyUrl=`${base}/certificat/${encodeURIComponent(c.certificate_no)}`;
+  const qr=await QRCode.toBuffer(verifyUrl,{type:'png',errorCorrectionLevel:'H',margin:1,width:240,color:{dark:'#000000',light:'#ffffff'}});
+  doc.image(qr,704,34,{width:76,height:76});
+  doc.fillColor('#111').font('Helvetica-Bold').fontSize(6.8)
+    .text(String(c.certificate_no),680,112,{width:118,align:'center',lineBreak:false,ellipsis:true});
+  doc.end();
 }
 
-// Teacher portal
-app.get('/api/teacher/me',auth,role('teacher'),(req,res)=>res.json(db.prepare('SELECT id,teacher_no,name,email,phone FROM teachers WHERE id=?').get(req.user.id)));
-app.get('/api/teacher/programs',auth,role('teacher'),(req,res)=>res.json(db.prepare('SELECT p.* FROM programs p JOIN program_teachers pt ON pt.program_id=p.id WHERE pt.teacher_id=? ORDER BY p.name').all(req.user.id)));
-app.get('/api/teacher/modules',auth,role('teacher'),(req,res)=>res.json(db.prepare(`SELECT m.*,p.name program_name FROM modules m JOIN programs p ON p.id=m.program_id JOIN program_teachers pt ON pt.program_id=p.id WHERE pt.teacher_id=? ORDER BY p.name,m.order_no,m.id`).all(req.user.id)));
-app.post('/api/teacher/modules',auth,role('teacher'),(req,res)=>{const b=req.body;const ok=db.prepare('SELECT 1 FROM program_teachers WHERE program_id=? AND teacher_id=?').get(Number(b.program_id),req.user.id);if(!ok)return res.status(403).json({error:'Formation non affectée'});const r=db.prepare('INSERT INTO modules(program_id,title,description,order_no) VALUES(?,?,?,?)').run(Number(b.program_id),b.title,b.description||'',Number(b.order_no||1));res.json({ok:true,id:r.lastInsertRowid});});
-app.post('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{const b=req.body;const ok=db.prepare('SELECT 1 FROM modules m JOIN program_teachers pt ON pt.program_id=m.program_id WHERE m.id=? AND pt.teacher_id=?').get(Number(b.module_id),req.user.id);if(!ok)return res.status(403).json({error:'Module non autorisé'});const r=db.prepare('INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no) VALUES(?,?,?,?,?,?,?,?,?,?)').run(Number(b.module_id),b.title,b.type||'Texte',b.content||'',b.video_url||'',b.file_url||'',b.meeting_url||'',b.scheduled_at||null,Number(b.duration_minutes||60),Number(b.order_no||1));res.json({ok:true,id:r.lastInsertRowid});});
-app.get('/api/teacher/students',auth,role('teacher'),(req,res)=>res.json(db.prepare(`SELECT DISTINCT s.id,s.student_no,s.name,s.email,s.phone,p.name program_name FROM students s JOIN enrollments e ON e.student_id=s.id JOIN program_teachers pt ON pt.teacher_id=? JOIN programs p ON p.id=pt.program_id AND p.id=e.program_id ORDER BY s.name`).all(req.user.id)));
-// Student portal
-app.get('/api/student/enrollments',auth,role('student'),(req,res)=>res.json(db.prepare("SELECT e.program_id,e.status,e.access_enabled,e.enrolled_at,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé' AND (pay.payment_category IS NULL OR pay.payment_category IN ('Mensualité','Trimestriel'))),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC").all(req.user.id)));
-app.get('/api/student/me',auth,role('student'),(req,res)=>{const s=db.prepare('SELECT s.id,s.student_no,s.name,s.email,s.phone,s.status,p.name program_name FROM students s LEFT JOIN programs p ON p.id=s.program_id WHERE s.id=?').get(req.user.id);const enrollments=db.prepare(`SELECT e.program_id,e.status,e.access_enabled,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé' AND (pay.payment_category IS NULL OR pay.payment_category IN ('Mensualité','Trimestriel'))),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC`).all(req.user.id);res.json({...s,enrollments});});
-app.get('/api/student/content',auth,role('student'),(req,res)=>{const programId=Number(req.query.program_id||0);const enrollment=programId?db.prepare("SELECT program_id FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(req.user.id,programId):db.prepare("SELECT program_id FROM enrollments WHERE student_id=? AND status='Actif' AND access_enabled=1 ORDER BY enrolled_at DESC LIMIT 1").get(req.user.id);const pid=programId||(enrollment?.program_id);if(!pid||!enrollment)return res.status(403).json({error:'Aucune formation active autorisée'});const rows=db.prepare('SELECT m.id module_id,m.title module_title,m.description,l.id lesson_id,l.title lesson_title,l.type,l.content,l.video_url,l.file_url,l.meeting_url,l.scheduled_at,l.duration_minutes,l.order_no,COALESCE(lp.completed,0) completed FROM modules m JOIN lessons l ON l.module_id=m.id LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.student_id=? WHERE m.program_id=? AND m.active=1 AND l.active=1 ORDER BY m.order_no,l.order_no').all(req.user.id,pid);res.json(rows);});
 app.post('/api/student/progress',auth,role('student'),(req,res)=>{const lessonId=Number(req.body.lesson_id);const lesson=db.prepare('SELECT m.program_id FROM lessons l JOIN modules m ON m.id=l.module_id WHERE l.id=? AND l.active=1 AND m.active=1').get(lessonId);if(!lesson)return res.status(404).json({error:'Leçon introuvable'});if(!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(req.user.id,lesson.program_id))return res.status(403).json({error:'Accès non autorisé à cette formation'});db.prepare('INSERT INTO lesson_progress(student_id,lesson_id,completed,completed_at) VALUES(?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(student_id,lesson_id) DO UPDATE SET completed=1,completed_at=CURRENT_TIMESTAMP').run(req.user.id,lessonId);res.json({ok:true,certificate:autoCertificateForStudent(req.user.id,lesson.program_id)});});
 app.use((req,res)=>{if(req.path.startsWith('/api/'))return res.status(404).json({error:'Route API introuvable',path:req.path});res.status(404).send('Page introuvable');});
 app.use((err,req,res,next)=>{console.error('CETEP ERROR',err);if(res.headersSent)return next(err);res.status(500).json({error:'Erreur interne du serveur'});});
