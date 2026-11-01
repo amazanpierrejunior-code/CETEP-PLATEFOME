@@ -679,15 +679,21 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   // Modèle officiel CETEP approuvé : décorations, signatures, logos et sceau conservés.
   // Le fond est au format 1422x1106; le PDF conserve exactement le même ratio.
   const W=842,H=655;
+  // Vérifier le fichier AVANT d'ouvrir le flux PDF vers la réponse HTTP.
+  // Sinon doc.end() puis res.send() provoque ERR_STREAM_WRITE_AFTER_END.
+  const model=path.join(__dirname,'public','certificat-cetep-modele-officiel-dynamique.png');
+  if(!fs.existsSync(model)){
+    console.error('[CETEP] Modèle officiel introuvable:',model);
+    return res.status(500).send('Modèle officiel CETEP introuvable dans public/.');
+  }
   const doc=new PDFDocument({size:[W,H],margin:0});
   res.setHeader('Content-Type','application/pdf');
   res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
   res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
   res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');
   res.setHeader('X-CETEP-Certificate-Model','14.7.6-modele-officiel-qr-individuel');
+  doc.on('error',err=>{console.error('[CETEP] Erreur génération PDF:',err);if(!res.headersSent)res.status(500).end('Erreur génération certificat');else if(!res.destroyed)res.destroy(err);});
   doc.pipe(res);
-  const model=path.join(__dirname,'public','certificat-cetep-modele-officiel-dynamique.png');
-  if(!fs.existsSync(model)){doc.end();return res.status(500).send('Modèle officiel CETEP introuvable.');}
   doc.image(model,0,0,{width:W,height:H});
 
   const safeSize=(v,d,min,max)=>Math.max(min,Math.min(max,Number(v)||d));
