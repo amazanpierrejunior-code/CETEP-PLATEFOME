@@ -880,27 +880,35 @@ async function restoreNeonSnapshot(snapshot){
     catch{throw new Error('Snapshot Neon compressé illisible; données locales conservées.');}
   }
   if(!snapshot||snapshot.format!=='cetep-snapshot-v1'||!snapshot.tables||typeof snapshot.tables!=='object')throw new Error('Snapshot Neon invalide; données locales conservées.');
-  const localNames=localTableNames();
-  const known=new Set(localNames);
-  // Backward-compatible additive migration: older production snapshots predate
-  // the academic module and secretariat audit table. Create empty collections locally; never drop legacy rows.
-  for(const name of ['academic_terms','academic_subjects','academic_grades','secretariat_audit']){
-    if(known.has(name)&&!Array.isArray(snapshot.tables[name]))snapshot.tables[name]=[];
+    const localNames = localTableNames();
+  const known = new Set(localNames);
+
+  // Migration additive: accepter les anciennes sauvegardes Neon
+  // sans supprimer les données existantes.
+  const backwardCompatibleTables = [
+    'academic_terms',
+    'academic_subjects',
+    'academic_grades',
+    'secretariat_audit',
+    'certificate_program_texts'
+  ];
+
+  for (const name of backwardCompatibleTables) {
+    if (known.has(name) && !Array.isArray(snapshot.tables[name])) {
+      snapshot.tables[name] = [];
+      console.log(
+        `[CETEP] Migration automatique : table ${name} absente du snapshot, initialisée vide.`
+      );
+    }
   }
-  const isLegacy=snapshot.version==='legacy-mirror';
-  const required=isLegacy?['admins','programs','students','payments']:['admins','programs','students','enrollments','payments'];
-  if(!required.every(name=>Array.isArray(snapshot.tables[name])))throw new Error('Snapshot Neon incomplet; données locales conservées.');
-  // Older table-by-table mirrors predate multi-enrollment support. Rebuild this
-  // table from the legacy students.program_id column after restoring the core rows.
-  if(isLegacy&&!Array.isArray(snapshot.tables.enrollments))snapshot.tables.enrollments=[];
-  // Atomic snapshots must represent every table known by this application. A legacy
-  // per-table mirror may omit tables introduced later; those local tables are retained.
-  if(!isLegacy){
+
+  // Vérifier que les tables essentielles sont présentes.
+  const isLegacy = snapshot.version === 'legacy-mirror';
     const missing=localNames.filter(name=>!Array.isArray(snapshot.tables[name]));
     const unknown=Object.keys(snapshot.tables).filter(name=>!known.has(name));
     if(missing.length)throw new Error(`Snapshot Neon incomplet: tables absentes (${missing.join(', ')}); données locales conservées.`);
     if(unknown.length)throw new Error(`Snapshot Neon contient des tables inconnues (${unknown.join(', ')}); mise à jour de schéma requise, données locales conservées.`);
-  }
+
   const tables=Object.entries(snapshot.tables).filter(([name,rows])=>known.has(name)&&Array.isArray(rows));
   const localBackup=path.join(DATA_DIR,'cetep-before-neon-restore.sqlite');
   // Preserve a local recovery copy before replacing anything with remote state.
