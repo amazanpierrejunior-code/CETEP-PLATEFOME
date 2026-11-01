@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.7.4-certificats-modele-officiel-aligne';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.7.3-certificats-controle-lecons-paiements';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -665,86 +665,134 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   if(!c)return res.status(404).send('Certificat introuvable');
   if(!isAdmin && c.student_id!==req.user.id)return res.status(403).send('Accès interdit');
 
-  // Modèle officiel CETEP : le fond contient déjà les libellés, lignes pointillées,
-  // le texte institutionnel, le sceau et les zones de signatures. Ne pas les masquer.
+  // Modèle officiel CETEP fourni par la direction — utilisé comme fond exact du certificat.
   const W=842,H=605;
-  const doc=new PDFDocument({size:[W,H],margin:0});
-  res.setHeader('Content-Type','application/pdf');
-  res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
-  res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
-  res.setHeader('Pragma','no-cache');
-  res.setHeader('Expires','0');
-  res.setHeader('X-CETEP-Certificate-Model','14.7.4-official-template-aligned');
-  doc.pipe(res);
 
-  const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
-  if(fs.existsSync(model)) doc.image(model,0,0,{width:W,height:H});
+const doc=new PDFDocument({size:[W,H],margin:0});
 
-  const sigDG=path.join(__dirname,'public','signature-dg-livenson-fleuriot.png');
-  const sigWJ=path.join(__dirname,'public','signature-wilio-joseph.png');
-  if(fs.existsSync(sigDG)) doc.image(sigDG,205,476,{fit:[100,42],align:'center',valign:'center'});
-  if(fs.existsSync(sigWJ)) doc.image(sigWJ,515,476,{fit:[100,42],align:'center',valign:'center'});
-  const dgName=String(c.certificate_dg_name||'Agronome Livenson Fleuriot');
-  const dgTitle=String(c.certificate_dg_title||'Directeur Général');
-  const studiesName=String(c.certificate_studies_name||'Wilio Joseph');
-  const studiesTitle=String(c.certificate_studies_title||'Directeur des Études');
-  doc.fillColor('#111').font('Times-Bold').fontSize(9).text(dgName,155,528,{width:190,align:'center',lineBreak:false});
-  doc.fillColor('#333').font('Times-Roman').fontSize(9).text(dgTitle,155,544,{width:190,align:'center',lineBreak:false});
-  doc.fillColor('#111').font('Times-Bold').fontSize(9).text(studiesName,495,528,{width:190,align:'center',lineBreak:false});
-  doc.fillColor('#333').font('Times-Roman').fontSize(9).text(studiesTitle,495,544,{width:190,align:'center',lineBreak:false});
+res.setHeader('Content-Type','application/pdf');
+res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
 
-  const name=(c.certificate_name||c.student_name||'').trim();
-  const formation=(c.program_name||'Formation professionnelle').trim();
-  const formatCertificateDate=value=>{
-    if(!value)return '—';
-    const raw=String(value).slice(0,10);
-    const iso=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if(iso)return `${iso[3]}/${iso[2]}/${iso[1]}`;
-    const d=new Date(value);
-    return Number.isNaN(d.getTime())?'—':d.toLocaleDateString('fr-FR');
-  };
-  const dateDelivrance=formatCertificateDate(c.issued_at);
-  const rawStart=c.start_date||c.enrolled_at||null;
-  const parseDate=value=>{
-    if(!value)return null;
-    const raw=String(value).slice(0,10);
-    const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if(m){const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));return Number.isNaN(d.getTime())?null:d;}
-    const d=new Date(value);return Number.isNaN(d.getTime())?null:d;
-  };
-  const startDate=parseDate(rawStart);
-  let endDate=parseDate(c.end_date);
-  if(!endDate&&startDate){
-    const durationMatch=String(c.duration||'').match(/(\d+)\s*(?:mois|month|months)/i);
-    if(durationMatch){endDate=new Date(startDate);endDate.setMonth(endDate.getMonth()+Number(durationMatch[1]));}
-  }
-  const dateText=d=>d?formatCertificateDate(d.toISOString().slice(0,10)):'Non renseignée';
-  const debut=dateText(startDate), finFormation=dateText(endDate);
-  const intro=String(c.certificate_program_intro||c.certificate_intro||'').trim();
-  const extra=String(c.certificate_program_extra_text??c.certificate_extra_text??'').trim();
-  const safeSize=(value,fallback,min,max)=>Math.min(max,Math.max(min,Number(value)||fallback));
+doc.pipe(res);
 
-  // Le nom est centré sur la première ligne pointillée du modèle original.
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(safeSize(c.certificate_name_size,15,10,20))
-    .text(name,125,333,{width:592,height:25,align:'center',lineBreak:false,ellipsis:true});
-  // La formation occupe la deuxième ligne pointillée, sans déplacer les libellés imprimés.
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(safeSize(c.certificate_program_size,15,10,20))
-    .text(formation,125,384,{width:592,height:24,align:'center',lineBreak:false,ellipsis:true});
+res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
+res.setHeader('Pragma','no-cache');
+res.setHeader('Expires','0');
+res.setHeader('X-CETEP-Certificate-Model','14.6.14-subtitle-removed-label-spaced');
 
-  // La zone de description est limitée au paragraphe prévu par le modèle officiel.
-  // Pas de période ajoutée par-dessus : elle reste dans le bloc, sur une ligne dédiée si renseignée.
-  const descLines=[intro,extra].filter(Boolean);
-  const period=`Période de formation : du ${debut} au ${finFormation}`;
-  if(startDate||endDate) descLines.push(period);
-  const descText=descLines.join('\n');
-  if(descText){
-    doc.fillColor('#222').font('Times-Roman').fontSize(safeSize(c.certificate_other_size,10,8,11))
-      .text(descText,190,408,{width:462,height:47,align:'center',lineGap:1,ellipsis:true});
-  }
+const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
 
-  // La date remplace uniquement les pointillés après « Fait à Carrefour, le ».
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(11)
-    .text(dateDelivrance,485,458,{width:130,height:18,align:'center',lineBreak:false});
+if(fs.existsSync(model)){
+  doc.image(model,0,0,{width:W,height:H});
+}
+// Masquer l'ancien libellé imprimé dans l'image et le replacer légèrement plus haut.
+doc.save();
+doc.fillColor('#fff').opacity(0.96).rect(350,300,145,22).fill();
+doc.restore();
+doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(13).text('Décerné à :',350,286,{width:145,align:'center',lineBreak:false});
+// Masque discret de l'ancien paragraphe imprimé dans le modèle, sans toucher aux lignes du nom et de la formation.
+doc.save();
+doc.fillColor('#fff').opacity(0.97).rect(184,405,486,39).fill();
+doc.fillColor('#fff').opacity(0.98).rect(300,447,282,22).fill();
+doc.restore();
+
+/* =========================================================
+   SIGNATURES OFFICIELLES CETEP — images transparentes
+   ========================================================= */
+const sigDG=path.join(__dirname,'public','signature-dg-livenson-fleuriot.png');
+const sigWJ=path.join(__dirname,'public','signature-wilio-joseph.png');
+if(fs.existsSync(sigDG))doc.image(sigDG,175,488,{fit:[135,52],align:'center',valign:'center'});
+if(fs.existsSync(sigWJ))doc.image(sigWJ,495,488,{fit:[135,52],align:'center',valign:'center'});
+const dgName=String(c.certificate_dg_name||'Agronome Livenson Fleuriot');
+const dgTitle=String(c.certificate_dg_title||'Directeur Général');
+const studiesName=String(c.certificate_studies_name||'Wilio Joseph');
+const studiesTitle=String(c.certificate_studies_title||'Directeur des Études');
+doc.fillColor('#111').font('Times-Bold').fontSize(10).text(dgName,145,542,{width:195,align:'center',lineBreak:false});
+doc.fillColor('#333').font('Times-Roman').fontSize(10).text(dgTitle,145,560,{width:195,align:'center',lineBreak:false});
+doc.fillColor('#111').font('Times-Bold').fontSize(10).text(studiesName,455,542,{width:215,align:'center',lineBreak:false});
+doc.fillColor('#333').font('Times-Roman').fontSize(10).text(studiesTitle,455,560,{width:215,align:'center',lineBreak:false});
+
+/* =========================================================
+   INFORMATIONS DYNAMIQUES
+   ========================================================= */
+
+const name=(c.certificate_name||c.student_name||'').trim();
+const formation=(c.program_name||'Formation professionnelle').trim();
+
+const formatCertificateDate=value=>{
+  if(!value)return '—';
+  const raw=String(value).slice(0,10);
+  const iso=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(iso)return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  const d=new Date(value);
+  return Number.isNaN(d.getTime())?'—':d.toLocaleDateString('fr-FR');
+};
+const fin=formatCertificateDate(c.issued_at);
+// Use the saved enrollment date if a start date was not entered.
+const rawStart=c.start_date||c.enrolled_at||null;
+const parseDate=value=>{
+  if(!value)return null;
+  const raw=String(value).slice(0,10);
+  const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(m){const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));return Number.isNaN(d.getTime())?null:d;}
+  const d=new Date(value);return Number.isNaN(d.getTime())?null:d;
+};
+const startDate=parseDate(rawStart);
+let endDate=parseDate(c.end_date);
+// If no end date was saved, derive a provisional date only when program duration explicitly states months.
+if(!endDate && startDate){
+  const durationMatch=String(c.duration||'').match(/(\d+)\s*(?:mois|month|months)/i);
+  if(durationMatch){endDate=new Date(startDate);endDate.setMonth(endDate.getMonth()+Number(durationMatch[1]));}
+}
+const dateText=d=>d?formatCertificateDate(d.toISOString().slice(0,10)):'Non renseignée';
+const debut=dateText(startDate);
+const finFormation=dateText(endDate);
+const certificateIntro=String(c.certificate_program_intro||c.certificate_intro||'').trim();
+const certificateExtra=String(c.certificate_program_extra_text??c.certificate_extra_text??'').trim();
+if(certificateIntro){doc.fillColor('#222').font('Times-Roman').fontSize(Math.min(13,Math.max(8,Number(c.certificate_other_size)||12))).text(certificateIntro,185,405,{width:484,align:'center',lineBreak:false,ellipsis:true});}
+if(certificateExtra){doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(Math.min(12,Math.max(8,Number(c.certificate_other_size)||12))).text(certificateExtra,185,434,{width:484,align:'center',lineBreak:false,ellipsis:true});}
+
+/* Nom de l'étudiant — centré sur la première ligne */
+doc.fillColor('#1b1f3a')
+   .font('Times-Bold')
+   .fontSize(Math.min(24,Math.max(8,Number(c.certificate_name_size)||15)))
+   .text(name,145,321,{
+      width:560,
+      align:'center',
+      lineBreak:false
+   });
+
+/* Formation — centrée sur la deuxième ligne */
+doc.fillColor('#1b1f3a')
+   .font('Times-Roman')
+  .fontSize(Math.min(24,Math.max(8,Number(c.certificate_program_size)||15)))
+   .text(formation,145,380,{
+      width:560,
+      align:'center',
+      lineBreak:false
+   });
+
+/* Période de formation : dates saisies dans le dossier étudiant */
+doc.fillColor('#1b1f3a')
+   .font('Helvetica')
+   .fontSize(Math.min(18,Math.max(8,Number(c.certificate_other_size)||12)))
+   .text(`Période de formation : du ${debut} au ${finFormation}`,180,420,{
+      width:480,
+      align:'center',
+      lineBreak:false
+   });
+
+/* Lieu de délivrance — valeur modifiable dans Administration > Certificats */
+doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(12).text(`Fait à ${String(c.certificate_city||'Carrefour')}, le`,300,448,{width:180,align:'right',lineBreak:false});
+/* Date de délivrance du certificat — distincte de la période de formation */
+doc.fillColor('#111')
+   .font('Times-Roman')
+   .fontSize(Math.min(18,Math.max(8,Number(c.certificate_other_size)||12)))
+   .text(fin,485,448,{
+      width:125,
+      align:'center',
+      lineBreak:false
+   });
 
 /* =========================================================
    QR CODE — EN HAUT À DROITE
