@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.7.3-certificats-controle-lecons-paiements';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.6.18-modeles-certificats-par-formation';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -107,26 +107,6 @@ CREATE TABLE IF NOT EXISTS gallery(
   active INTEGER DEFAULT 1,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS academic_terms(
- id INTEGER PRIMARY KEY AUTOINCREMENT, program_id INTEGER NOT NULL, academic_year TEXT NOT NULL,
- term_no INTEGER NOT NULL, term_name TEXT NOT NULL, start_date TEXT, end_date TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
- UNIQUE(program_id,academic_year,term_no), FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS academic_subjects(
- id INTEGER PRIMARY KEY AUTOINCREMENT, program_id INTEGER NOT NULL, subject_name TEXT NOT NULL,
- subject_code TEXT, coefficient REAL NOT NULL DEFAULT 1, active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
- UNIQUE(program_id,subject_name), FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS academic_grades(
- id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL, program_id INTEGER NOT NULL,
- subject_id INTEGER NOT NULL, term_id INTEGER NOT NULL, intra_score REAL NOT NULL DEFAULT 0,
- final_score REAL NOT NULL DEFAULT 0, weighted_score REAL NOT NULL DEFAULT 0, observation TEXT,
- updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(student_id,subject_id,term_id),
- FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
- FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,
- FOREIGN KEY(subject_id) REFERENCES academic_subjects(id) ON DELETE CASCADE,
- FOREIGN KEY(term_id) REFERENCES academic_terms(id) ON DELETE CASCADE
-);
 `);
 // Safe schema upgrades for existing CETEP databases.
 function ensureColumn(table,column,definition){
@@ -149,23 +129,6 @@ db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_nif_unique ON students(n
 ensureColumn('payments','payment_message','TEXT');
 ensureColumn('payments','payment_proof','TEXT');
 ensureColumn('payments','program_id','INTEGER');
-ensureColumn('payments','billing_month','TEXT');
-// Role separation and immutable secretariat payment audit trail.
-ensureColumn('admins','role',"TEXT NOT NULL DEFAULT 'admin'");
-ensureColumn('admins','active','INTEGER NOT NULL DEFAULT 1');
-ensureColumn('students','created_by','INTEGER');
-ensureColumn('students','created_by_email','TEXT');
-ensureColumn('payments','payment_category','TEXT');
-ensureColumn('payments','billing_period','TEXT');
-ensureColumn('payments','recorded_by','INTEGER');
-ensureColumn('payments','recorded_by_email','TEXT');
-db.exec(`CREATE TABLE IF NOT EXISTS secretariat_audit(
- id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id INTEGER NOT NULL, actor_email TEXT NOT NULL,
- action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, details TEXT,
- created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);`);
-
-ensureColumn('programs','monthly_fee_htg','REAL DEFAULT 0');
 ensureColumn('enrollments','access_enabled','INTEGER DEFAULT 0');
 ensureColumn('enrollments','manual_authorized','INTEGER DEFAULT 0');
 // Preserve old single-program records when upgrading to multi-program enrollment.
@@ -176,8 +139,6 @@ db.prepare("UPDATE enrollments SET access_enabled=1 WHERE status='Actif' AND acc
 db.prepare("UPDATE final_results SET pass_mark=70, status=CASE WHEN score>=70 THEN 'Réussi' ELSE 'Échoué' END WHERE pass_mark=60").run();
 const defaults={school_name:'CETEP',school_full_name:"Centre d'Encadrement Technique et Professionnel",slogan:'Formation • Orientation • Insertion professionnelle',address:'Lamentin 54, Ruelle Crispin #856',phone:'+509 3601 8696 / +509 3736 5610 / +1 561-674-2890',email:'cetepecoleprofessionnelle@gmail.com',primary_color:'#0d2b52',secondary_color:'#1677b8',accent_color:'#087443',logo_text:'CETEP',logo_url:'',typography_font_family:'Arial,Helvetica,sans-serif',typography_font_size:'16px',typography_bold:'0',typography_italic:'0',typography_line_height:'1.5',certificate_intro:'Dans le cadre du renforcement des compétences techniques et professionnelles au Centre d’Encadrement Technique et Professionnel (CETEP).',certificate_city:'Carrefour',certificate_dg_name:'Agronome Livenson Fleuriot',certificate_dg_title:'Directeur Général',certificate_studies_name:'Wilio Joseph',certificate_studies_title:'Directeur des Études',certificate_extra_text:'',certificate_name_size:'15',certificate_program_size:'15',certificate_other_size:'12'};
 const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');for(const [k,v] of Object.entries(defaults))set.run(k,v);
-db.exec(`CREATE TABLE IF NOT EXISTS certificate_program_texts(program_id INTEGER PRIMARY KEY, intro TEXT NOT NULL DEFAULT '', extra_text TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
-
 // CETEP official contact defaults: fill blank values on existing installations without overwriting admin edits.
 const currentSettings=Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));
 if(!String(currentSettings.phone||'').trim())db.prepare("UPDATE settings SET value=? WHERE key='phone'").run(defaults.phone);
@@ -193,13 +154,13 @@ function synchronizeAdminAccount(){
   if(reset){
     if(!e || !p || p.length<12) throw new Error('FORCE_ADMIN_RESET=true mande ADMIN_EMAIL ak ADMIN_PASSWORD ki gen omwen 12 karaktè.');
     const hash=bcrypt.hashSync(p,12);
-    if(existing) db.prepare("UPDATE admins SET email=?,password_hash=?,role='admin',active=1 WHERE id=?").run(e,hash,existing.id);
-    else db.prepare("INSERT INTO admins(email,password_hash,role,active) VALUES(?,?,'admin',1)").run(e,hash);
+    if(existing) db.prepare('UPDATE admins SET email=?,password_hash=? WHERE id=?').run(e,hash,existing.id);
+    else db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(e,hash);
     changed=true;
     console.warn('[CETEP ADMIN] Admin password reset applied AFTER Neon snapshot restore. Set FORCE_ADMIN_RESET=false or remove it after successful recovery.');
   } else if(!db.prepare('SELECT 1 FROM admins LIMIT 1').get()){
     if(IS_PRODUCTION && (!e || !p || p.length<12)) throw new Error('Configuration CETEP invalide: ADMIN_EMAIL et ADMIN_PASSWORD (12 caractères minimum) sont requis pour créer le premier administrateur.');
-    db.prepare("INSERT INTO admins(email,password_hash,role,active) VALUES(?,?,'admin',1)").run(e||'admin@cetep.local',bcrypt.hashSync(p||'local-only-password-change-me',12));
+    db.prepare('INSERT INTO admins(email,password_hash) VALUES(?,?)').run(e||'admin@cetep.local',bcrypt.hashSync(p||'local-only-password-change-me',12));
     changed=true;
   }
   return changed;
@@ -314,24 +275,8 @@ for(const d of [
  }
 }
 function settings(){return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));}
-function sign(p){return jwt.sign(p,SECRET,{expiresIn:'12h'});}
-function auth(req,res,next){
-  try{
-    const t=req.cookies.cetep_token;if(!t)throw 0;
-    req.user=jwt.verify(t,SECRET);
-    // Recheck privileged accounts against the database on every request so a
-    // disabled secretary/admin loses access immediately, even with an old JWT.
-    if(['admin','secretary'].includes(req.user.role)){
-      const account=db.prepare('SELECT role,active FROM admins WHERE id=? AND lower(email)=lower(?)').get(Number(req.user.id),String(req.user.email||''));
-      if(!account||account.role!==req.user.role||Number(account.active)!==1){
-        res.clearCookie('cetep_token');
-        return res.status(401).json({error:'Compte désactivé ou session révoquée. Reconnectez-vous.'});
-      }
-    }
-    next();
-  }catch{res.status(401).json({error:'Non autorisé'});}
-}
-function role(...roles){return (req,res,next)=>roles.includes(req.user?.role)?next():res.status(403).json({error:'Accès interdit'});} 
+function sign(p){return jwt.sign(p,SECRET,{expiresIn:'12h'});}function auth(req,res,next){try{const t=req.cookies.cetep_token;if(!t)throw 0;req.user=jwt.verify(t,SECRET);next();}catch{res.status(401).json({error:'Non autorisé'});}}
+function role(...roles){return (req,res,next)=>roles.includes(req.user?.role)?next():res.status(403).json({error:'Accès interdit'});}
 function nextNo(prefix,table,col){let n=db.prepare(`SELECT COUNT(*) c FROM ${table}`).get().c+1;let x=`${prefix}-${new Date().getFullYear()}-${String(n).padStart(4,'0')}`;while(db.prepare(`SELECT 1 FROM ${table} WHERE ${col}=?`).get(x)){n++;x=`${prefix}-${new Date().getFullYear()}-${String(n).padStart(4,'0')}`;}return x;}
 
 function certificateNo(){
@@ -343,15 +288,12 @@ function certificateNo(){
 function completionStats(studentId,programId){
   const total=db.prepare(`SELECT COUNT(*) c FROM modules m JOIN lessons l ON l.module_id=m.id WHERE m.program_id=? AND m.active=1 AND l.active=1`).get(programId).c;
   const done=db.prepare(`SELECT COUNT(*) c FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id JOIN modules m ON m.id=l.module_id WHERE lp.student_id=? AND m.program_id=? AND m.active=1 AND l.active=1 AND lp.completed=1`).get(studentId,programId).c;
-  // Aucun contenu publié ne signifie PAS que l'étudiant a terminé la formation.
-  // Il faut au moins une leçon active publiée et toutes ces leçons terminées.
-  return {total,done,percent:total>0?Math.min(100,Math.round(done*100/total)):0};
+  return {total,done,percent:total?Math.round(done*100/total):100};
 }
 function paymentStats(studentId,programId){
-  const due=Number(db.prepare('SELECT price_htg FROM programs WHERE id=?').get(programId)?.price_htg||0);
-  const paid=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) paid FROM payments WHERE student_id=? AND program_id=? AND status='Confirmé' AND (payment_category IS NULL OR payment_category IN ('Mensualité','Trimestriel'))").get(studentId,programId)?.paid||0);
-  // Une formation sans tarif défini (0 ou négatif) n'est jamais considérée payée automatiquement.
-  return {due,paid,fullyPaid:due>0 && paid>=due};
+  const due=Number(db.prepare('SELECT COALESCE(price_htg,0) price_htg FROM programs WHERE id=?').get(programId)?.price_htg||0);
+  const paid=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) paid FROM payments WHERE student_id=? AND program_id=? AND status='Confirmé'").get(studentId,programId)?.paid||0);
+  return {due,paid,fullyPaid:due<=0||paid>=due};
 }
 function refreshStudentCourseAccess(studentId,programId){
   if(!studentId||!programId)return false;
@@ -418,29 +360,14 @@ app.get('/health',async(req,res)=>{
   res.status(status.ok?200:503).json(status);
 });
 function sendPage(res,file){const pub=path.join(__dirname,'public',file);const root=path.join(__dirname,file);if(fs.existsSync(pub))return res.sendFile(pub);if(fs.existsSync(root))return res.sendFile(root);return res.status(404).send('Page introuvable: '+file);}
-app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-2026-clean-template.png',certificate_model_version:'14.4.9-exact-template',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.4.8-official-exact-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/secretariat',(req,res)=>sendPage(res,'secretary.html'));app.get('/secretary',(req,res)=>res.redirect('/secretariat'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
-function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||a.role!=='admin'||Number(a.active)!==1||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
-function secretaryLogin(req,res){const a=db.prepare("SELECT * FROM admins WHERE email=? AND role='secretary' AND active=1").get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants secrétariat invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'secretary'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/secretariat'});}
-app.post('/api/secretary/login',secretaryLogin);
+app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-2026-clean-template.png',certificate_model_version:'14.4.9-exact-template',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.4.8-official-exact-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
+function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
 app.post('/api/login',adminLogin);app.post('/api/login/admin',adminLogin);
 function teacherLogin(req,res){const t=db.prepare('SELECT * FROM teachers WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!t||!t.active||!bcrypt.compareSync(req.body.password||'',t.password_hash))return res.status(401).json({error:'Identifiants professeur invalides'});res.cookie('cetep_token',sign({id:t.id,teacher_no:t.teacher_no,role:'teacher'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/teacher'});}
 app.post('/api/teacher/login',teacherLogin);app.post('/api/login/teacher',teacherLogin);
 function studentLogin(req,res){const s=db.prepare('SELECT * FROM students WHERE student_no=?').get((req.body.code||req.body.student_no||'').trim().toUpperCase());if(!s||Number(s.access_enabled)!==1||!s.password_hash||!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND access_enabled=1 AND status='Actif' LIMIT 1").get(s.id)||!bcrypt.compareSync(req.body.password||'',s.password_hash))return res.status(401).json({error:'Code étudiant, mot de passe ou accès invalide'});res.cookie('cetep_token',sign({id:s.id,student_no:s.student_no,role:'student'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/student'});}
 app.post('/api/student/login',studentLogin);app.post('/api/login/student',studentLogin);
 app.post('/api/logout',(req,res)=>{res.clearCookie('cetep_token');res.json({ok:true});});app.get('/api/session',auth,(req,res)=>res.json({user:req.user}));
-// Supervised secretary accounts: only the principal administrator can create/manage them.
-app.get('/api/admin/secretaries',auth,role('admin'),(req,res)=>res.json(db.prepare("SELECT id,email,active,created_at FROM admins WHERE role='secretary' ORDER BY id DESC").all()));
-app.get('/api/admin/secretariat-audit',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM secretariat_audit ORDER BY id DESC LIMIT 200').all()));
-app.post('/api/admin/secretaries',auth,role('admin'),(req,res)=>{const email=String(req.body.email||'').trim().toLowerCase(),password=String(req.body.password||'');if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return res.status(400).json({error:'Adresse email invalide.'});if(password.length<12)return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});try{const r=db.prepare("INSERT INTO admins(email,password_hash,role,active) VALUES(?,?,'secretary',1)").run(email,bcrypt.hashSync(password,12));db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,'CREATE_ACCOUNT','secretary',?,?)").run(req.user.id,req.user.email,r.lastInsertRowid,JSON.stringify({email}));res.status(201).json({ok:true,id:r.lastInsertRowid,email});}catch(e){res.status(409).json({error:'Cet email est déjà utilisé.'});}});
-app.patch('/api/admin/secretaries/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),a=db.prepare("SELECT id,email FROM admins WHERE id=? AND role='secretary'").get(id);if(!a)return res.status(404).json({error:'Compte secrétaire introuvable.'});const active=req.body.active===false||req.body.active===0?0:1;db.prepare('UPDATE admins SET active=? WHERE id=?').run(active,id);if(req.body.password){const pw=String(req.body.password);if(pw.length<12)return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});db.prepare('UPDATE admins SET password_hash=? WHERE id=?').run(bcrypt.hashSync(pw,12),id);}db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,?,'secretary',?,?)").run(req.user.id,req.user.email,active?'ACTIVATE_ACCOUNT':'DEACTIVATE_ACCOUNT',id,JSON.stringify({active,password_changed:!!req.body.password}));res.json({ok:true,active});});
-app.get('/api/secretary/programs',auth,role('secretary'),(req,res)=>res.json(db.prepare('SELECT id,name,duration,price_htg,monthly_fee_htg FROM programs WHERE active=1 ORDER BY name').all()));
-app.get('/api/secretary/students',auth,role('secretary'),(req,res)=>{const q=String(req.query.q||'').trim();const like='%'+q+'%';res.json(db.prepare(`SELECT id,student_no,name,phone FROM students WHERE (?='' OR name LIKE ? OR student_no LIKE ? OR nif LIKE ? OR cin LIKE ?) ORDER BY id DESC LIMIT 100`).all(q,like,like,like,like));});
-app.post('/api/secretary/students',auth,role('secretary'),(req,res)=>{try{const b=req.body||{},nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(!b.name||!b.phone||!b.program_id)return res.status(400).json({error:'Nom, téléphone et formation obligatoires.'});if(!nif&&!cin)return res.status(400).json({error:'NIF ou CIN obligatoire.'});if(nif&&db.prepare('SELECT id FROM students WHERE nif=?').get(nif))return res.status(409).json({error:'Ce NIF existe déjà. Contactez l’administrateur pour une correction.'});if(cin&&db.prepare('SELECT id FROM students WHERE cin=?').get(cin))return res.status(409).json({error:'Ce CIN existe déjà. Contactez l’administrateur pour une correction.'});const program=db.prepare('SELECT id FROM programs WHERE id=? AND active=1').get(Number(b.program_id));if(!program)return res.status(400).json({error:'Formation invalide.'});const no=nextNo('CETEP','students','student_no');const pw=generateTemporaryPassword();const tx=db.transaction(()=>{const r=db.prepare(`INSERT INTO students(student_no,name,birth_date,birth_place,phone,email,nif,cin,program_id,education,blood_group,responsible_person,marital_status,status,password_hash,access_enabled,created_by,created_by_email) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`).run(no,String(b.name).trim(),b.birth_date||null,b.birth_place||null,String(b.phone).trim(),b.email||null,nif||null,cin||null,Number(b.program_id),b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,'En attente',bcrypt.hashSync(pw,12),req.user.id,req.user.email);db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,'En attente',0,0,?,?)").run(r.lastInsertRowid,Number(b.program_id),b.start_date||null,b.end_date||null);db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,'CREATE_STUDENT','student',?,?)").run(req.user.id,req.user.email,r.lastInsertRowid,JSON.stringify({student_no:no,program_id:Number(b.program_id)}));return Number(r.lastInsertRowid);});const id=tx();res.status(201).json({ok:true,id,student_no:no,temporary_password:pw});}catch(e){res.status(400).json({error:e.message});}});
-app.post('/api/secretary/payments',auth,role('secretary'),(req,res)=>{try{const b=req.body||{},sid=Number(b.student_id),amount=Number(b.amount_htg),category=String(b.payment_category||'').trim(),method=String(b.method||'').trim();const allowed=['Inscription','Badge','Mayo CETEP','Mensualité','Trimestriel','Matériel','Autre'];if(!sid||!db.prepare('SELECT id FROM students WHERE id=?').get(sid))return res.status(400).json({error:'Choisissez un étudiant valide.'});if(!Number.isFinite(amount)||amount<=0)return res.status(400).json({error:'Le montant doit être supérieur à zéro.'});if(!allowed.includes(category))return res.status(400).json({error:'Catégorie de paiement invalide.'});if(!method)return res.status(400).json({error:'Méthode de paiement obligatoire.'});const student=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(b.program_id||student.program_id||0)||null;if(pid&&!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(400).json({error:'Cette formation ne figure pas au dossier de l’étudiant.'});const period=String(b.billing_period||'').trim();if(['Mensualité','Trimestriel'].includes(category)&&!period)return res.status(400).json({error:'Indiquez le mois ou le trimestre concerné.'});const isCash=['Espèces','Cash','Manuel','Cash HTG'].includes(method);const status=isCash?'Confirmé':'En attente';const ref='SEC-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+crypto.randomBytes(4).toString('hex').toUpperCase();const r=db.prepare(`INSERT INTO payments(student_id,program_id,amount_htg,method,status,reference,payment_category,billing_period,recorded_by,recorded_by_email,billing_month) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(sid,pid,amount,method,status,ref,category,period||null,req.user.id,req.user.email,/^\d{4}-(0[1-9]|1[0-2])$/.test(period)?period:null);db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,'RECORD_PAYMENT','payment',?,?)").run(req.user.id,req.user.email,r.lastInsertRowid,JSON.stringify({student_id:sid,amount_htg:amount,category,method,status,reference:ref}));if(status==='Confirmé'&&pid&&['Mensualité','Trimestriel'].includes(category))refreshStudentCourseAccess(sid,pid);res.status(201).json({ok:true,id:r.lastInsertRowid,reference:ref,status,receipt:'/api/secretary/payments/'+r.lastInsertRowid+'/receipt'});}catch(e){res.status(400).json({error:e.message});}});
-app.get('/api/secretary/payments',auth,role('secretary'),(req,res)=>res.json(db.prepare(`SELECT p.id,p.reference,p.amount_htg,p.method,p.status,p.payment_category,p.billing_period,p.created_at,s.name student_name,s.student_no FROM payments p LEFT JOIN students s ON s.id=p.student_id WHERE p.recorded_by=? ORDER BY p.id DESC LIMIT 200`).all(req.user.id)));
-app.get('/api/secretary/payments/:id/receipt',auth,role('secretary','admin'),(req,res)=>{const p=db.prepare(`SELECT p.*,s.name student_name,s.student_no FROM payments p LEFT JOIN students s ON s.id=p.student_id WHERE p.id=?`).get(Number(req.params.id));if(!p)return res.status(404).send('Reçu introuvable');if(req.user.role==='secretary'&&Number(p.recorded_by)!==Number(req.user.id))return res.status(403).send('Accès interdit');const doc=new PDFDocument({size:'A5',margin:36,info:{Title:'Reçu CETEP '+p.reference,Author:'CETEP'}});res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Disposition',`inline; filename="recu-${p.reference}.pdf"`);doc.pipe(res);doc.fontSize(18).text('CETEP',{align:'center'});doc.fontSize(10).text('Centre d’Encadrement Technique et Professionnel',{align:'center'});doc.moveDown().fontSize(16).text('REÇU DE PAIEMENT',{align:'center'});doc.moveDown().fontSize(11).text('N° : '+p.reference);doc.text('Date : '+p.created_at);doc.text('Étudiant : '+(p.student_name||'—')+' ('+(p.student_no||'—')+')');doc.text('Motif : '+(p.payment_category||'—'));doc.text('Période : '+(p.billing_period||'—'));doc.text('Montant : '+Number(p.amount_htg).toLocaleString('fr-FR')+' HTG');doc.text('Méthode : '+p.method);doc.text('Statut : '+p.status);doc.moveDown().text('Enregistré par : '+(p.recorded_by_email||'Secrétariat'));doc.moveDown(2).text('Merci de votre paiement.',{align:'center'});doc.end();});
-app.get('/api/secretary/reports/daily',auth,role('secretary'),(req,res)=>res.json(db.prepare(`SELECT payment_category,status,COUNT(*) count,SUM(amount_htg) total FROM payments WHERE recorded_by=? AND date(created_at)=date('now') GROUP BY payment_category,status ORDER BY payment_category`).all(req.user.id)));
-
 app.get('/api/public/settings',(req,res)=>res.json(settings()));
 app.get('/api/public/student-lookup',(req,res)=>{res.set('Cache-Control','no-store');res.json({verified:false,message:'Pour protéger les données personnelles, la vérification de l’identité se fait lors de l’envoi du formulaire.'})});app.get('/api/public/programs',(req,res)=>res.json(db.prepare('SELECT * FROM programs WHERE active=1 ORDER BY id').all()));app.get('/api/public/support',(req,res)=>res.json(db.prepare('SELECT id,name,account_name,account_value,bank_name,bank_account,routing,instructions FROM support_methods WHERE active=1 ORDER BY sort_order,id').all()));app.get('/api/public/gallery',(req,res)=>res.json(db.prepare('SELECT id,title,description,image_url FROM gallery WHERE active=1 ORDER BY sort_order,id DESC').all()));
 app.post('/api/admissions',async (req,res)=>{
@@ -491,37 +418,80 @@ app.post('/api/public/enrollment-payment',async (req,res)=>{try{
  }catch(e){res.status(400).json({error:e.message});}});
 app.post('/api/public/donation',async (req,res)=>{try{const b=req.body||{};if(!b.name||!b.method||!b.amount)return res.status(400).json({error:'Nom, méthode et montant obligatoires'});const r=db.prepare('INSERT INTO donations(name,email,amount,method,reference,message) VALUES(?,?,?,?,?,?)').run(b.name,b.email||'',Number(b.amount),b.method,b.reference||'',b.message||'');const emailNotification=await sendCETEPNotification('Nouveau soutien CETEP — '+r.lastInsertRowid,`<h2>Nouveau soutien reçu</h2><p><b>Nom :</b> ${escapeHtml(b.name)}</p><p><b>Email :</b> ${escapeHtml(b.email||'Non fourni')}</p><p><b>Montant :</b> ${Number(b.amount).toLocaleString('fr-FR')}</p><p><b>Méthode :</b> ${escapeHtml(b.method)}</p><p><b>Référence :</b> ${escapeHtml(b.reference||'Non fournie')}</p><p><b>Message :</b> ${escapeHtml(b.message||'')}</p><p><b>Date :</b> ${new Date().toLocaleString('fr-FR')}</p>`);res.status(201).json({ok:true,id:r.lastInsertRowid,email_notification:emailNotification,message:'Merci pour votre soutien. Votre contribution a été enregistrée et CETEP a reçu la notification.'});}catch(e){res.status(400).json({error:e.message});}});
 app.get('/api/admin/stats',auth,role('admin'),(req,res)=>res.json({students:db.prepare('SELECT COUNT(*) c FROM students').get().c,activeStudents:db.prepare("SELECT COUNT(DISTINCT student_id) c FROM enrollments WHERE access_enabled=1 AND status='Actif'").get().c,teachers:db.prepare('SELECT COUNT(*) c FROM teachers').get().c,programs:db.prepare('SELECT COUNT(*) c FROM programs WHERE active=1').get().c,pending:db.prepare("SELECT COUNT(*) c FROM enrollments WHERE status='En attente'").get().c,revenue:db.prepare("SELECT COALESCE(SUM(amount_htg),0) s FROM payments WHERE status='Confirmé'").get().s,donations:db.prepare("SELECT COALESCE(SUM(amount),0) s FROM donations WHERE status!='Refusé'").get().s}));
-app.get('/api/admin/certificate-program-texts',auth,role('admin'),(req,res)=>{
- const rows=db.prepare('SELECT id,name,duration,description FROM programs ORDER BY id').all();
- const saved=new Map(db.prepare('SELECT * FROM certificate_program_texts').all().map(x=>[Number(x.program_id),x]));
- const defaultsFor=name=>{const n=String(name||'').toLowerCase();
-  if(n.includes('secourisme'))return {intro:'Cette formation lui a permis d’acquérir les connaissances et les compétences nécessaires pour intervenir efficacement en situation d’urgence et contribuer à la sécurité et au bien-être de la communauté.',extra:''};
-  if(n.includes('électricité')||n.includes('electricite'))return {intro:'Cette formation lui a permis d’acquérir les compétences nécessaires à l’installation, au raccordement, à l’entretien et au dépannage des équipements électriques des bâtiments, dans le respect des normes et des règles de sécurité.',extra:''};
-  if(n.includes('plomberie'))return {intro:'Cette formation lui a permis d’acquérir les compétences nécessaires à l’installation, à l’entretien et à la réparation des réseaux et équipements de plomberie, dans le respect des règles techniques et de sécurité.',extra:''};
-  if(n.includes('aide-soignant')||n.includes('aide soignant'))return {intro:'Cette formation lui a permis d’acquérir les connaissances et les compétences nécessaires pour assister les patients dans les soins quotidiens, contribuer à leur confort et respecter les règles d’hygiène et de sécurité.',extra:''};
-  if(n.includes('sérigraph')||n.includes('serigraph'))return {intro:'Cette formation lui a permis de maîtriser les techniques de préparation, de création et d’impression en sérigraphie, ainsi que l’utilisation sécuritaire des équipements et des matériaux.',extra:''};
-  if(n.includes('carrelage'))return {intro:'Cette formation lui a permis d’acquérir les compétences nécessaires à la préparation des surfaces, à la pose et à la finition des revêtements en carrelage, selon les règles de qualité et de sécurité.',extra:''};
-  return {intro:`Cette formation lui a permis d’acquérir les connaissances théoriques et les compétences pratiques nécessaires dans le domaine de ${String(name||'la formation professionnelle')}, conformément aux objectifs pédagogiques du CETEP.`,extra:''};
- };
- res.json(rows.map(p=>{const s=saved.get(Number(p.id));const d=defaultsFor(p.name);return {...p,certificate_intro:s?s.intro:d.intro,certificate_extra_text:s?s.extra_text:d.extra,customized:!!s};}));
+app.get('/api/admin/settings',auth,role('admin'),(req,res)=>res.json(settings())); // Modèles de certificats personnalisés par formation CETEP
+const programCertificateFields = [
+  'certificate_intro',
+  'certificate_city',
+  'certificate_dg_name',
+  'certificate_dg_title',
+  'certificate_studies_name',
+  'certificate_studies_title',
+  'certificate_extra_text',
+  'certificate_name_size',
+  'certificate_program_size',
+  'certificate_other_size'
+];
+
+app.get('/api/admin/programs/:id/certificate-template',auth,role('admin'),(req,res)=>{
+  const programId=Number(req.params.id);
+
+  if(!Number.isInteger(programId)||programId<1)
+    return res.status(400).json({error:'Formation invalide'});
+
+  const program=db.prepare('SELECT id,name FROM programs WHERE id=?').get(programId);
+
+  if(!program)
+    return res.status(404).json({error:'Formation introuvable'});
+
+  const prefix=`certificate_program_${programId}_`;
+  const rows=db.prepare('SELECT key,value FROM settings WHERE key LIKE ?').all(prefix+'%');
+  const saved=Object.fromEntries(rows.map(row=>[row.key.slice(prefix.length),row.value]));
+
+  const globalSettings=settings();
+  const template={};
+
+  for(const field of programCertificateFields){
+    template[field]=saved[field]!==undefined && saved[field]!=='' 
+      ? saved[field]
+      : (globalSettings[field]||'');
+  }
+
+  res.json({ok:true,program,template});
 });
-app.put('/api/admin/certificate-program-texts/:id',auth,role('admin'),(req,res)=>{
- const id=Number(req.params.id);if(!db.prepare('SELECT 1 FROM programs WHERE id=?').get(id))return res.status(404).json({error:'Formation introuvable'});
- const intro=String(req.body?.certificate_intro||'').trim();const extra=String(req.body?.certificate_extra_text||'').trim();
- if(!intro)return res.status(400).json({error:'Le texte du certificat est obligatoire.'});
- db.prepare(`INSERT INTO certificate_program_texts(program_id,intro,extra_text,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(program_id) DO UPDATE SET intro=excluded.intro,extra_text=excluded.extra_text,updated_at=CURRENT_TIMESTAMP`).run(id,intro,extra);
- res.json({ok:true,message:'Texte du certificat enregistré pour cette formation.'});
-});
-app.get('/api/admin/settings',auth,role('admin'),(req,res)=>res.json(settings()));app.put('/api/admin/settings',auth,role('admin'),(req,res)=>{const q=db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');for(const k of Object.keys(defaults))if(req.body[k]!==undefined)q.run(k,String(req.body[k]));res.json({ok:true,settings:settings()});});app.post('/api/admin/logo/reset',auth,role('admin'),(req,res)=>{db.prepare("UPDATE settings SET value='' WHERE key='logo_url'").run();res.json({ok:true});});
+
+app.put('/api/admin/programs/:id/certificate-template',auth,role('admin'),(req,res)=>{
+  const programId=Number(req.params.id);
+
+  if(!Number.isInteger(programId)||programId<1)
+    return res.status(400).json({error:'Formation invalide'});
+
+  if(!db.prepare('SELECT id FROM programs WHERE id=?').get(programId))
+    return res.status(404).json({error:'Formation introuvable'});
+
+  const body=req.body||{};
+  const save=db.prepare(`
+    INSERT INTO settings(key,value) VALUES(?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value
+  `);
+
+  for(const field of programCertificateFields){
+    if(body[field]!==undefined){
+      const value=String(body[field]).slice(0,3000);
+      save.run(`certificate_program_${programId}_${field}`,value);
+    }
+  }
+
+  res.json({ok:true,message:'Modèle de certificat de cette formation enregistré.'});
+}); app.put('/api/admin/settings',auth,role('admin'),(req,res)=>{const q=db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');for(const k of Object.keys(defaults))if(req.body[k]!==undefined)q.run(k,String(req.body[k]));res.json({ok:true,settings:settings()});});app.post('/api/admin/logo/reset',auth,role('admin'),(req,res)=>{db.prepare("UPDATE settings SET value='' WHERE key='logo_url'").run();res.json({ok:true});});
 app.get('/api/admin/students',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT s.*,p.name program_name,e.start_date,e.end_date FROM students s LEFT JOIN programs p ON p.id=s.program_id LEFT JOIN enrollments e ON e.student_id=s.id AND e.program_id=s.program_id ORDER BY s.id DESC').all()));
 app.post('/api/admin/students',auth,role('admin'),(req,res)=>{try{const b=req.body;const nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(!b.name||!b.phone||!b.program_id)return res.status(400).json({error:'Nom, téléphone et formation obligatoires'});if(!nif&&!cin)return res.status(400).json({error:'NIF ou CIN obligatoire pour identifier l’étudiant.'});if(nif&&db.prepare('SELECT id FROM students WHERE nif=? LIMIT 1').get(nif))return res.status(409).json({error:'Ce NIF existe déjà.'});if(cin&&db.prepare('SELECT id FROM students WHERE cin=? LIMIT 1').get(cin))return res.status(409).json({error:'Ce CIN existe déjà.'});const suppliedPassword=String(b.password||'');if(suppliedPassword&&!passwordIsStrong(suppliedPassword))return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});const temporaryPassword=suppliedPassword?'':generateTemporaryPassword();const pw=suppliedPassword||temporaryPassword;const no=String(b.student_no||'').trim().toUpperCase()||nextNo('CETEP','students','student_no');if(!/^[A-Z0-9][A-Z0-9._-]{2,39}$/.test(no))return res.status(400).json({error:'Code étudiant invalide : utilisez 3 à 40 caractères (lettres, chiffres, tiret, point ou underscore).'});if(db.prepare('SELECT 1 FROM students WHERE student_no=?').get(no))return res.status(409).json({error:'Ce code étudiant existe déjà.'});const r=db.prepare(`INSERT INTO students(student_no,name,birth_date,birth_place,phone,email,nif,cin,program_id,education,blood_group,responsible_person,marital_status,status,password_hash,access_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(no,b.name,b.birth_date||null,b.birth_place||null,b.phone,b.email||null,nif||null,cin||null,Number(b.program_id),b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.status||'Actif',bcrypt.hashSync(pw,12),b.access_enabled===false?0:1);db.prepare('INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,?,?,?,?,?)').run(r.lastInsertRowid,Number(b.program_id),b.access_enabled===false?'En attente':'Actif',b.access_enabled===false?0:1,b.access_enabled===false?0:1,b.start_date||null,b.end_date||null);res.status(201).json({ok:true,id:r.lastInsertRowid,student_no:no,...(temporaryPassword?{temporary_password:temporaryPassword}:{})});}catch(e){if(String(e.message).includes('UNIQUE constraint failed: students.nif'))return res.status(409).json({error:'Ce NIF existe déjà.'});if(String(e.message).includes('UNIQUE constraint failed: students.cin'))return res.status(409).json({error:'Ce CIN existe déjà.'});res.status(400).json({error:e.message});}});
 app.put('/api/admin/students/:id',auth,role('admin'),async (req,res)=>{try{const id=Number(req.params.id);const before=db.prepare('SELECT * FROM students WHERE id=?').get(id);if(!before)return res.status(404).json({error:'Étudiant introuvable'});const b=req.body||{};const code=String(b.student_no??before.student_no).trim().toUpperCase();if(!/^[A-Z0-9][A-Z0-9._-]{2,39}$/.test(code))return res.status(400).json({error:'Code étudiant invalide.'});if(db.prepare('SELECT 1 FROM students WHERE student_no=? AND id<>?').get(code,id))return res.status(409).json({error:'Ce code étudiant appartient déjà à un autre étudiant.'});const nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(nif&&db.prepare('SELECT 1 FROM students WHERE nif=? AND id<>?').get(nif,id))return res.status(409).json({error:'Ce NIF est déjà enregistré.'});if(cin&&db.prepare('SELECT 1 FROM students WHERE cin=? AND id<>?').get(cin,id))return res.status(409).json({error:'Ce CIN est déjà enregistré.'});const tx=db.transaction(()=>{db.prepare(`UPDATE students SET student_no=?,name=?,birth_date=?,birth_place=?,phone=?,email=?,nif=?,cin=?,program_id=?,education=?,blood_group=?,responsible_person=?,marital_status=?,certificate_name=? WHERE id=?`).run(code,b.name??before.name,b.birth_date||null,b.birth_place||null,b.phone||null,b.email||null,nif||null,cin||null,Number(b.program_id||before.program_id)||null,b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.certificate_name||null,id);const pid=Number(b.program_id||before.program_id||0);if(pid){db.prepare('INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,?,?,?,?,?)').run(id,pid,b.status||before.status||'Actif',Number(before.access_enabled||0),1,b.start_date||null,b.end_date||null);db.prepare('UPDATE enrollments SET start_date=?,end_date=? WHERE student_id=? AND program_id=?').run(b.start_date||null,b.end_date||null,id,pid);db.prepare('UPDATE students SET program_id=? WHERE id=?').run(pid,id);}});tx();res.json({ok:true,message:'Dossier étudiant mis à jour.'});}catch(e){if(String(e.message).includes('students.nif'))return res.status(409).json({error:'Ce NIF est déjà enregistré.'});if(String(e.message).includes('students.cin'))return res.status(409).json({error:'Ce CIN est déjà enregistré.'});res.status(400).json({error:e.message});}});
 app.post('/api/admin/students/:id/access',auth,role('admin'),async (req,res)=>{const s=db.prepare('SELECT * FROM students WHERE id=?').get(Number(req.params.id));if(!s)return res.status(404).json({error:'Étudiant introuvable'});const enabled=!!req.body.enabled;const suppliedPassword=String(req.body.password||'');if(enabled&&suppliedPassword&&!passwordIsStrong(suppliedPassword))return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});if(enabled&&!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND status='Actif' AND access_enabled=1 LIMIT 1").get(s.id))return res.status(409).json({error:'Autorisez d’abord au moins une formation dans « Gérer les formations ». L’accès global ne doit pas autoriser toutes les formations automatiquement.'});const temporaryPassword=enabled&&!suppliedPassword?generateTemporaryPassword():'';const newPassword=suppliedPassword||temporaryPassword;const hash=newPassword?bcrypt.hashSync(newPassword,12):s.password_hash;const tx=db.transaction(()=>{if(!enabled)db.prepare("UPDATE enrollments SET access_enabled=0,status='Suspendu' WHERE student_id=?").run(s.id);db.prepare('UPDATE students SET access_enabled=?,status=?,password_hash=? WHERE id=?').run(enabled?1:0,enabled?'Actif':'Suspendu',hash,s.id);});tx();res.json({ok:true,enabled,...(temporaryPassword?{temporary_password:temporaryPassword}:{})});});
-app.get('/api/admin/students/:id/enrollments',auth,role('admin'),(req,res)=>res.json(db.prepare("SELECT e.*,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé' AND (pay.payment_category IS NULL OR pay.payment_category IN ('Mensualité','Trimestriel'))),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC").all(Number(req.params.id))));
+app.get('/api/admin/students/:id/enrollments',auth,role('admin'),(req,res)=>res.json(db.prepare("SELECT e.*,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé'),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC").all(Number(req.params.id))));
 app.post('/api/admin/students/:id/enrollments',auth,role('admin'),(req,res)=>{const studentId=Number(req.params.id),programId=Number(req.body.program_id);if(!db.prepare('SELECT id FROM students WHERE id=?').get(studentId))return res.status(404).json({error:'Étudiant introuvable'});if(!db.prepare('SELECT id FROM programs WHERE id=?').get(programId))return res.status(400).json({error:'Formation introuvable'});try{db.prepare("INSERT INTO enrollments(student_id,program_id,status,access_enabled) VALUES(?,?,'En attente',0)").run(studentId,programId);res.status(201).json({ok:true,message:'Nouvelle inscription ajoutée en attente de validation.'});}catch(e){if(String(e.message).includes('UNIQUE constraint failed'))return res.status(409).json({error:'Cet étudiant est déjà inscrit à cette formation.'});res.status(400).json({error:e.message});}});
 app.post('/api/admin/students/:id/enrollments/:programId/authorize',auth,role('admin'),(req,res)=>{const sid=Number(req.params.id),pid=Number(req.params.programId),enabled=!!req.body.enabled;const row=db.prepare('SELECT id FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid);if(!row)return res.status(404).json({error:'Inscription introuvable'});db.prepare('UPDATE enrollments SET status=?,access_enabled=?,manual_authorized=? WHERE student_id=? AND program_id=?').run(enabled?'Actif':'Suspendu',enabled?1:0,enabled?1:-1,sid,pid);const active=Number(db.prepare("SELECT COUNT(*) c FROM enrollments WHERE student_id=? AND status='Actif' AND access_enabled=1").get(sid).c||0);db.prepare('UPDATE students SET access_enabled=?,status=? WHERE id=?').run(active?1:0,active?'Actif':'En attente',sid);res.json({ok:true,enabled});});
 app.get('/api/admin/teachers',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT id,teacher_no,name,email,phone,active FROM teachers ORDER BY id DESC').all()));app.post('/api/admin/teachers',auth,role('admin'),(req,res)=>{try{const b=req.body;if(!b.name||!b.email)return res.status(400).json({error:'Nom et email obligatoires'});const suppliedPassword=String(b.password||'');if(suppliedPassword&&!passwordIsStrong(suppliedPassword))return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});const temporaryPassword=suppliedPassword?'':generateTemporaryPassword();const no=nextNo('PROF','teachers','teacher_no');const r=db.prepare('INSERT INTO teachers(teacher_no,name,email,phone,password_hash) VALUES(?,?,?,?,?)').run(no,b.name,b.email.toLowerCase(),b.phone||'',bcrypt.hashSync(suppliedPassword||temporaryPassword,12));res.json({ok:true,id:r.lastInsertRowid,teacher_no:no,...(temporaryPassword?{temporary_password:temporaryPassword}:{})});}catch(e){res.status(400).json({error:e.message});}});app.post('/api/admin/teachers/:id/status',auth,role('admin'),(req,res)=>{db.prepare('UPDATE teachers SET active=? WHERE id=?').run(req.body.active?1:0,req.params.id);res.json({ok:true});});
-app.get('/api/admin/programs',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM programs ORDER BY id').all()));app.post('/api/admin/programs',auth,role('admin'),(req,res)=>{const b=req.body;const r=db.prepare('INSERT INTO programs(name,duration,description,price_htg,monthly_fee_htg,active) VALUES(?,?,?,?,?,?)').run(b.name,b.duration||'',b.description||'',Number(b.price_htg||0),Math.max(0,Number(b.monthly_fee_htg||0)),b.active===false?0:1);res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/programs/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE programs SET name=?,duration=?,description=?,price_htg=?,monthly_fee_htg=?,active=? WHERE id=?').run(b.name,b.duration||'',b.description||'',Number(b.price_htg||0),Math.max(0,Number(b.monthly_fee_htg||0)),b.active===false?0:1,req.params.id);res.json({ok:true});});app.delete('/api/admin/programs/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM programs WHERE id=?').run(req.params.id);res.json({ok:true});});
+app.get('/api/admin/programs',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM programs ORDER BY id').all()));app.post('/api/admin/programs',auth,role('admin'),(req,res)=>{const b=req.body;const r=db.prepare('INSERT INTO programs(name,duration,description,price_htg,active) VALUES(?,?,?,?,?)').run(b.name,b.duration||'',b.description||'',Number(b.price_htg||0),b.active===false?0:1);res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/programs/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE programs SET name=?,duration=?,description=?,price_htg=?,active=? WHERE id=?').run(b.name,b.duration||'',b.description||'',Number(b.price_htg||0),b.active===false?0:1,req.params.id);res.json({ok:true});});app.delete('/api/admin/programs/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM programs WHERE id=?').run(req.params.id);res.json({ok:true});});
 app.get('/api/admin/modules',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT m.*,p.name program_name FROM modules m JOIN programs p ON p.id=m.program_id ORDER BY p.id,m.order_no,m.id').all()));
 app.post('/api/admin/modules',auth,role('admin'),(req,res)=>{const b=req.body||{},programId=Number(b.program_id),title=String(b.title||'').trim();if(!programId||!title)return res.status(400).json({error:'Formation et titre obligatoires'});if(!db.prepare('SELECT 1 FROM programs WHERE id=?').get(programId))return res.status(400).json({error:'Formation introuvable'});const r=db.prepare('INSERT INTO modules(program_id,title,description,order_no) VALUES(?,?,?,?)').run(programId,title,String(b.description||''),Math.max(1,Number(b.order_no||1)));res.status(201).json({ok:true,id:r.lastInsertRowid});});
 app.put('/api/admin/modules/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},id=Number(req.params.id),title=String(b.title||'').trim();if(!title)return res.status(400).json({error:'Titre du module obligatoire'});const row=db.prepare('SELECT id FROM modules WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Module introuvable'});db.prepare('UPDATE modules SET title=?,description=?,order_no=? WHERE id=?').run(title,String(b.description||''),Math.max(1,Number(b.order_no||1)),id);res.json({ok:true});});
@@ -531,8 +501,7 @@ app.post('/api/admin/lessons',auth,role('admin'),(req,res)=>{const b=req.body||{
 app.put('/api/admin/lessons/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},id=Number(req.params.id),title=String(b.title||'').trim();if(!title)return res.status(400).json({error:'Titre de la leçon obligatoire'});const row=db.prepare('SELECT id FROM lessons WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Leçon introuvable'});const type=['Texte','Vidéo','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';if(type==='Classe en ligne'&&!String(b.meeting_url||'').trim())return res.status(400).json({error:'Le lien de la classe en ligne est obligatoire.'});db.prepare('UPDATE lessons SET title=?,type=?,content=?,video_url=?,file_url=?,meeting_url=?,scheduled_at=?,duration_minutes=?,order_no=? WHERE id=?').run(title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)),id);res.json({ok:true});});
 app.delete('/api/admin/lessons/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),row=db.prepare('SELECT id FROM lessons WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Leçon introuvable'});db.prepare('DELETE FROM lessons WHERE id=?').run(id);res.json({ok:true});});
 app.post('/api/admin/assign-teacher',auth,role('admin'),(req,res)=>{db.prepare('INSERT OR IGNORE INTO program_teachers(program_id,teacher_id) VALUES(?,?)').run(Number(req.body.program_id),Number(req.body.teacher_id));res.json({ok:true});});app.get('/api/admin/teacher-assignments',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT pt.*,t.name teacher_name,p.name program_name FROM program_teachers pt JOIN teachers t ON t.id=pt.teacher_id JOIN programs p ON p.id=pt.program_id').all()));
-app.get('/api/admin/payments',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT p.*,s.name student_name,s.student_no,e.access_enabled program_access_enabled,pr.name program_name FROM payments p LEFT JOIN students s ON s.id=p.student_id LEFT JOIN programs pr ON pr.id=COALESCE(p.program_id,s.program_id) LEFT JOIN enrollments e ON e.student_id=p.student_id AND e.program_id=COALESCE(p.program_id,s.program_id) ORDER BY p.id DESC').all()));app.get('/api/admin/payments/:id/proof',auth,role('admin'),(req,res)=>{const p=db.prepare('SELECT payment_proof FROM payments WHERE id=?').get(Number(req.params.id));if(!p||!p.payment_proof)return res.status(404).send('Confirmation introuvable');const m=String(p.payment_proof).match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);if(!m)return res.status(415).send('Format de confirmation non pris en charge');res.setHeader('Content-Type',m[1]);res.setHeader('Cache-Control','private, max-age=60');res.send(Buffer.from(m[2],'base64'));});app.put('/api/admin/payments/:id/month',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),month=String(req.body.billing_month||'').trim();if(month&&!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return res.status(400).json({error:'Mois de paiement invalide.'});const row=db.prepare('SELECT id FROM payments WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Paiement introuvable'});db.prepare('UPDATE payments SET billing_month=? WHERE id=?').run(month||null,id);res.json({ok:true,billing_month:month||null});});
-app.post('/api/admin/payments/:id/status',auth,role('admin'),async (req,res)=>{const status=['En attente','Confirmé','Refusé'].includes(req.body.status)?req.body.status:'En attente';const pay=db.prepare('SELECT student_id,program_id FROM payments WHERE id=?').get(Number(req.params.id));if(!pay)return res.status(404).json({error:'Paiement introuvable'});db.prepare('UPDATE payments SET status=? WHERE id=?').run(status,req.params.id);let access=false,confirmation=null,certificate=null;if(pay.student_id&&pay.program_id){access=refreshStudentCourseAccess(pay.student_id,pay.program_id);if(status==='Confirmé'){certificate=autoCertificateForStudent(pay.student_id,pay.program_id);if(access){const student=db.prepare('SELECT s.*,p.name program_name FROM students s LEFT JOIN programs p ON p.id=? WHERE s.id=?').get(pay.program_id,pay.student_id);confirmation=await sendStudentConfirmation(student,student.program_name);}}}res.json({ok:true,status,program_id:pay.program_id,course_access:access,certificate,confirmation});});app.post('/api/admin/payments',auth,role('admin'),(req,res)=>{const b=req.body,ref=b.reference||`PAY-${Date.now()}`;if(!Number.isFinite(Number(b.amount_htg))||Number(b.amount_htg)<=0)return res.status(400).json({error:'Le montant doit être strictement positif.'});const studentId=b.student_id?Number(b.student_id):null;const programId=Number(b.program_id||(studentId?db.prepare('SELECT program_id FROM students WHERE id=?').get(studentId)?.program_id:0))||null;const status=b.status||'Confirmé';const billingMonth=String(b.billing_month||'').trim();if(billingMonth&&!/^\d{4}-(0[1-9]|1[0-2])$/.test(billingMonth))return res.status(400).json({error:'Mois de paiement invalide.'});if(studentId&&programId&&!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(studentId,programId))return res.status(400).json({error:'Ajoutez d’abord cette formation au dossier étudiant.'});const r=db.prepare('INSERT INTO payments(student_id,program_id,amount_htg,method,status,reference,billing_month) VALUES(?,?,?,?,?,?,?)').run(studentId,programId,Number(b.amount_htg||0),b.method||'Manuel',status,ref,billingMonth||null);const access=studentId&&programId&&status==='Confirmé'?refreshStudentCourseAccess(studentId,programId):false;const cert=studentId&&programId&&status!=='Refusé'?autoCertificateForStudent(studentId,programId):null;res.json({ok:true,id:r.lastInsertRowid,reference:ref,program_id:programId,course_access:access,certificate:cert});});
+app.get('/api/admin/payments',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT p.*,s.name student_name,s.student_no,e.access_enabled program_access_enabled,pr.name program_name FROM payments p LEFT JOIN students s ON s.id=p.student_id LEFT JOIN programs pr ON pr.id=COALESCE(p.program_id,s.program_id) LEFT JOIN enrollments e ON e.student_id=p.student_id AND e.program_id=COALESCE(p.program_id,s.program_id) ORDER BY p.id DESC').all()));app.get('/api/admin/payments/:id/proof',auth,role('admin'),(req,res)=>{const p=db.prepare('SELECT payment_proof FROM payments WHERE id=?').get(Number(req.params.id));if(!p||!p.payment_proof)return res.status(404).send('Confirmation introuvable');const m=String(p.payment_proof).match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);if(!m)return res.status(415).send('Format de confirmation non pris en charge');res.setHeader('Content-Type',m[1]);res.setHeader('Cache-Control','private, max-age=60');res.send(Buffer.from(m[2],'base64'));});app.post('/api/admin/payments/:id/status',auth,role('admin'),async (req,res)=>{const status=['En attente','Confirmé','Refusé'].includes(req.body.status)?req.body.status:'En attente';const pay=db.prepare('SELECT student_id,program_id FROM payments WHERE id=?').get(Number(req.params.id));if(!pay)return res.status(404).json({error:'Paiement introuvable'});db.prepare('UPDATE payments SET status=? WHERE id=?').run(status,req.params.id);let access=false,confirmation=null,certificate=null;if(pay.student_id&&pay.program_id){access=refreshStudentCourseAccess(pay.student_id,pay.program_id);if(status==='Confirmé'){certificate=autoCertificateForStudent(pay.student_id,pay.program_id);if(access){const student=db.prepare('SELECT s.*,p.name program_name FROM students s LEFT JOIN programs p ON p.id=? WHERE s.id=?').get(pay.program_id,pay.student_id);confirmation=await sendStudentConfirmation(student,student.program_name);}}}res.json({ok:true,status,program_id:pay.program_id,course_access:access,certificate,confirmation});});app.post('/api/admin/payments',auth,role('admin'),(req,res)=>{const b=req.body,ref=b.reference||`PAY-${Date.now()}`;if(!Number.isFinite(Number(b.amount_htg))||Number(b.amount_htg)<=0)return res.status(400).json({error:'Le montant doit être strictement positif.'});const studentId=b.student_id?Number(b.student_id):null;const programId=Number(b.program_id||(studentId?db.prepare('SELECT program_id FROM students WHERE id=?').get(studentId)?.program_id:0))||null;const status=b.status||'Confirmé';if(studentId&&programId&&!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(studentId,programId))return res.status(400).json({error:'Ajoutez d’abord cette formation au dossier étudiant.'});const r=db.prepare('INSERT INTO payments(student_id,program_id,amount_htg,method,status,reference) VALUES(?,?,?,?,?,?)').run(studentId,programId,Number(b.amount_htg||0),b.method||'Manuel',status,ref);const access=studentId&&programId&&status==='Confirmé'?refreshStudentCourseAccess(studentId,programId):false;const cert=studentId&&programId&&status!=='Refusé'?autoCertificateForStudent(studentId,programId):null;res.json({ok:true,id:r.lastInsertRowid,reference:ref,program_id:programId,course_access:access,certificate:cert});});
 app.get('/api/admin/support',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM support_methods ORDER BY sort_order,id').all()));app.post('/api/admin/support',auth,role('admin'),(req,res)=>{const b=req.body;if(!b.name)return res.status(400).json({error:'Nom obligatoire'});const r=db.prepare('INSERT INTO support_methods(name,account_name,account_value,bank_name,bank_account,routing,instructions,active,sort_order) VALUES(?,?,?,?,?,?,?,?,?)').run(b.name,b.account_name||'',b.account_value||'',b.bank_name||'',b.bank_account||'',b.routing||'',b.instructions||'',b.active===false?0:1,Number(b.sort_order||99));res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/support/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE support_methods SET name=?,account_name=?,account_value=?,bank_name=?,bank_account=?,routing=?,instructions=?,active=?,sort_order=? WHERE id=?').run(b.name,b.account_name||'',b.account_value||'',b.bank_name||'',b.bank_account||'',b.routing||'',b.instructions||'',b.active===false?0:1,Number(b.sort_order||99),req.params.id);res.json({ok:true});});app.delete('/api/admin/support/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM support_methods WHERE id=?').run(req.params.id);res.json({ok:true});});
 app.get('/api/admin/donations',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM donations ORDER BY id DESC').all()));app.post('/api/admin/donations/:id/status',auth,role('admin'),(req,res)=>{db.prepare('UPDATE donations SET status=? WHERE id=?').run(req.body.status||'Confirmé',req.params.id);res.json({ok:true});});
 app.get('/api/admin/gallery',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM gallery ORDER BY sort_order,id DESC').all()));app.post('/api/admin/gallery',auth,role('admin'),(req,res)=>{const b=req.body;if(!b.title||!b.image_url)return res.status(400).json({error:'Titre et photo obligatoires'});if(String(b.image_url).length>7000000)return res.status(400).json({error:'Photo trop grande. Maximum recommandé: 5 Mo.'});const r=db.prepare('INSERT INTO gallery(title,description,image_url,sort_order,active) VALUES(?,?,?,?,?)').run(b.title,b.description||'',b.image_url,Number(b.sort_order||99),b.active===false?0:1);res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE gallery SET title=?,description=?,image_url=?,sort_order=?,active=? WHERE id=?').run(b.title,b.description||'',b.image_url,b.sort_order||99,b.active===false?0:1,req.params.id);res.json({ok:true});});app.delete('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM gallery WHERE id=?').run(req.params.id);res.json({ok:true});});
@@ -593,31 +562,15 @@ app.post('/api/admin/local-sync',auth,role('admin'),(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','secretariat_audit','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v14.7.1.json"');res.send(JSON.stringify(out,null,2));});
-app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();db.prepare("UPDATE payments SET program_id=(SELECT program_id FROM students WHERE students.id=payments.student_id) WHERE program_id IS NULL").run();db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id,CASE WHEN status='Actif' THEN 'Actif' ELSE COALESCE(status,'En attente') END,CASE WHEN access_enabled=1 THEN 1 ELSE 0 END FROM students WHERE program_id IS NOT NULL").run();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
+app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v14.6.14.json"');res.send(JSON.stringify(out,null,2));});
+app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();db.prepare("UPDATE payments SET program_id=(SELECT program_id FROM students WHERE students.id=payments.student_id) WHERE program_id IS NULL").run();db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id,CASE WHEN status='Actif' THEN 'Actif' ELSE COALESCE(status,'En attente') END,CASE WHEN access_enabled=1 THEN 1 ELSE 0 END FROM students WHERE program_id IS NOT NULL").run();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
 
 // Certificates & academic results
-// Academic administration: flexible number of terms per program and academic year.
-app.get('/api/admin/academic/program/:programId',auth,role('admin'),(req,res)=>{
- const pid=Number(req.params.programId),year=String(req.query.year||new Date().getFullYear()+'-'+(new Date().getFullYear()+1));
- if(!db.prepare('SELECT id FROM programs WHERE id=?').get(pid))return res.status(404).json({error:'Formation introuvable'});
- res.json({program:db.prepare('SELECT id,name,monthly_fee_htg,price_htg FROM programs WHERE id=?').get(pid),terms:db.prepare('SELECT * FROM academic_terms WHERE program_id=? AND academic_year=? ORDER BY term_no').all(pid,year),subjects:db.prepare('SELECT * FROM academic_subjects WHERE program_id=? ORDER BY subject_name').all(pid)});
-});
-app.post('/api/admin/academic/terms',auth,role('admin'),(req,res)=>{const b=req.body||{},pid=Number(b.program_id),year=String(b.academic_year||'').trim(),no=Number(b.term_no),name=String(b.term_name||'').trim();if(!pid||!/^\d{4}[-/ ]\d{4}$/.test(year)||!Number.isInteger(no)||no<1||no>12||!name)return res.status(400).json({error:'Formation, année académique, numéro et nom du trimestre sont obligatoires.'});try{const r=db.prepare('INSERT INTO academic_terms(program_id,academic_year,term_no,term_name,start_date,end_date) VALUES(?,?,?,?,?,?)').run(pid,year,no,name,b.start_date||null,b.end_date||null);res.status(201).json({ok:true,id:r.lastInsertRowid});}catch(e){if(String(e.message).includes('UNIQUE'))return res.status(409).json({error:'Ce numéro de trimestre existe déjà pour cette formation et cette année.'});res.status(400).json({error:e.message});}});
-app.delete('/api/admin/academic/terms/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id);if(db.prepare('SELECT 1 FROM academic_grades WHERE term_id=?').get(id))return res.status(409).json({error:'Ce trimestre contient déjà des notes. Il ne peut pas être supprimé.'});db.prepare('DELETE FROM academic_terms WHERE id=?').run(id);res.json({ok:true});});
-app.post('/api/admin/academic/subjects',auth,role('admin'),(req,res)=>{const b=req.body||{},pid=Number(b.program_id),name=String(b.subject_name||'').trim(),coef=Number(b.coefficient||1);if(!pid||!name||!Number.isFinite(coef)||coef<=0)return res.status(400).json({error:'Formation, matière et coefficient positif obligatoires.'});try{const r=db.prepare('INSERT INTO academic_subjects(program_id,subject_name,subject_code,coefficient) VALUES(?,?,?,?)').run(pid,name,String(b.subject_code||''),coef);res.status(201).json({ok:true,id:r.lastInsertRowid});}catch(e){if(String(e.message).includes('UNIQUE'))return res.status(409).json({error:'Cette matière existe déjà pour cette formation.'});res.status(400).json({error:e.message});}});
-app.put('/api/admin/academic/subjects/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},name=String(b.subject_name||'').trim(),coef=Number(b.coefficient||1);if(!name||!Number.isFinite(coef)||coef<=0)return res.status(400).json({error:'Matière et coefficient positif obligatoires.'});db.prepare('UPDATE academic_subjects SET subject_name=?,subject_code=?,coefficient=?,active=? WHERE id=?').run(name,String(b.subject_code||''),coef,b.active===false?0:1,Number(req.params.id));res.json({ok:true});});
-app.get('/api/admin/academic/grades',auth,role('admin'),(req,res)=>{const pid=Number(req.query.program_id),tid=Number(req.query.term_id),sid=Number(req.query.student_id||0);if(!pid||!tid)return res.status(400).json({error:'Formation et trimestre obligatoires.'});res.json(db.prepare(`SELECT g.*,s.student_no,s.name student_name,sub.subject_name,sub.subject_code,sub.coefficient,t.term_name,t.academic_year FROM academic_grades g JOIN students s ON s.id=g.student_id JOIN academic_subjects sub ON sub.id=g.subject_id JOIN academic_terms t ON t.id=g.term_id WHERE g.program_id=? AND g.term_id=? AND (?=0 OR g.student_id=?) ORDER BY s.name,sub.subject_name`).all(pid,tid,sid,sid));});
-app.post('/api/admin/academic/grades',auth,role('admin'),(req,res)=>{const b=req.body||{},student=Number(b.student_id),pid=Number(b.program_id),sub=Number(b.subject_id),term=Number(b.term_id),intra=Number(b.intra_score),final=Number(b.final_score);if(!student||!pid||!sub||!term||![intra,final].every(Number.isFinite)||intra<0||intra>100||final<0||final>100)return res.status(400).json({error:'Vérifiez étudiant, formation, matière, trimestre et notes entre 0 et 100.'});if(!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(student,pid)||!db.prepare('SELECT 1 FROM academic_subjects WHERE id=? AND program_id=?').get(sub,pid)||!db.prepare('SELECT 1 FROM academic_terms WHERE id=? AND program_id=?').get(term,pid))return res.status(400).json({error:'L’étudiant, la matière et le trimestre doivent appartenir à cette formation.'});const weighted=Number((intra*.30+final*.70).toFixed(2));db.prepare(`INSERT INTO academic_grades(student_id,program_id,subject_id,term_id,intra_score,final_score,weighted_score,observation) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(student_id,subject_id,term_id) DO UPDATE SET intra_score=excluded.intra_score,final_score=excluded.final_score,weighted_score=excluded.weighted_score,observation=excluded.observation,updated_at=CURRENT_TIMESTAMP`).run(student,pid,sub,term,intra,final,weighted,String(b.observation||''));const termRow=db.prepare('SELECT academic_year FROM academic_terms WHERE id=?').get(term);const termCount=db.prepare('SELECT COUNT(*) c FROM academic_terms WHERE program_id=? AND academic_year=?').get(pid,termRow.academic_year).c;const subjectCount=db.prepare('SELECT COUNT(*) c FROM academic_subjects WHERE program_id=? AND active=1').get(pid).c;const gradeCount=db.prepare(`SELECT COUNT(*) c FROM academic_grades g JOIN academic_terms t ON t.id=g.term_id WHERE g.student_id=? AND g.program_id=? AND t.academic_year=?`).get(student,pid,termRow.academic_year).c;let certificate=null,annualAverage=null;if(termCount>0&&subjectCount>0&&gradeCount>=termCount*subjectCount){const totals=db.prepare(`SELECT COALESCE(SUM(g.weighted_score*sub.coefficient),0) total,COALESCE(SUM(sub.coefficient),0) coeff FROM academic_grades g JOIN academic_subjects sub ON sub.id=g.subject_id JOIN academic_terms t ON t.id=g.term_id WHERE g.student_id=? AND g.program_id=? AND t.academic_year=?`).get(student,pid,termRow.academic_year);annualAverage=totals.coeff?Number((totals.total/totals.coeff).toFixed(2)):0;const status=annualAverage>=70?'Réussi':'Échoué';db.prepare(`INSERT INTO final_results(student_id,program_id,score,pass_mark,status,notes) VALUES(?,?,?,70,?,'Moyenne annuelle calculée à partir des notes par trimestre (30 % intra, 70 % final).') ON CONFLICT(student_id,program_id) DO UPDATE SET score=excluded.score,pass_mark=70,status=excluded.status,notes=excluded.notes,evaluated_at=CURRENT_TIMESTAMP`).run(student,pid,annualAverage,status);certificate=tryAutoIssueCertificate(student,pid);}res.json({ok:true,weighted_score:weighted,status:weighted>=70?'Réussi':'À reprendre',annual_average:annualAverage,certificate});});
-app.get('/api/admin/academic/monthly/:studentId/:programId',auth,role('admin'),(req,res)=>{const sid=Number(req.params.studentId),pid=Number(req.params.programId),en=db.prepare('SELECT e.start_date,e.enrolled_at,p.monthly_fee_htg,p.name program_name,s.name student_name,s.student_no FROM enrollments e JOIN programs p ON p.id=e.program_id JOIN students s ON s.id=e.student_id WHERE e.student_id=? AND e.program_id=?').get(sid,pid);if(!en)return res.status(404).json({error:'Inscription introuvable'});const start=String(en.start_date||en.enrolled_at||new Date().toISOString()).slice(0,7),end=String(req.query.until||new Date().toISOString().slice(0,7));const fee=Number(en.monthly_fee_htg||0),rows=[];let [y,m]=start.split('-').map(Number),[ey,em]=end.split('-').map(Number),guard=0;while((y<ey||(y===ey&&m<=em))&&guard++<60){const month=`${y}-${String(m).padStart(2,'0')}`;const paid=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) v FROM payments WHERE student_id=? AND program_id=? AND billing_month=? AND status='Confirmé'").get(sid,pid,month).v||0);rows.push({month,fee,paid,balance:Math.max(0,fee-paid),status:paid>=fee&&fee>0?'Peye':paid>0?'An pati':fee>0?'Anreta':'Frè pa fikse'});if(++m>12){m=1;y++}}res.json({student_name:en.student_name,student_no:en.student_no,program_name:en.program_name,monthly_fee_htg:fee,rows,total_due:rows.reduce((a,x)=>a+x.fee,0),total_paid:rows.reduce((a,x)=>a+x.paid,0),balance:rows.reduce((a,x)=>a+x.balance,0)});});
-app.get('/api/admin/students/:id/dossier',auth,role('admin'),(req,res)=>{const sid=Number(req.params.id),student=db.prepare('SELECT * FROM students WHERE id=?').get(sid);if(!student)return res.status(404).json({error:'Étudiant introuvable'});const enrollments=db.prepare(`SELECT e.*,p.name program_name,p.price_htg,p.monthly_fee_htg,COALESCE((SELECT SUM(amount_htg) FROM payments WHERE student_id=e.student_id AND program_id=e.program_id AND status='Confirmé' AND (payment_category IS NULL OR payment_category IN ('Mensualité','Trimestriel'))),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at`).all(sid);const payments=db.prepare(`SELECT pay.*,p.name program_name FROM payments pay LEFT JOIN programs p ON p.id=pay.program_id WHERE pay.student_id=? ORDER BY pay.created_at DESC`).all(sid);const grades=db.prepare(`SELECT g.*,p.name program_name,sub.subject_name,sub.coefficient,t.term_name,t.academic_year,t.term_no FROM academic_grades g JOIN programs p ON p.id=g.program_id JOIN academic_subjects sub ON sub.id=g.subject_id JOIN academic_terms t ON t.id=g.term_id WHERE g.student_id=? ORDER BY p.name,t.academic_year,t.term_no,sub.subject_name`).all(sid);res.json({student,enrollments,payments,grades});});
-app.get('/api/admin/academic/transcript/:studentId/:programId',auth,role('admin'),(req,res)=>{const sid=Number(req.params.studentId),pid=Number(req.params.programId),year=String(req.query.year||'');const student=db.prepare('SELECT s.*,p.name program_name FROM students s JOIN enrollments e ON e.student_id=s.id AND e.program_id=? JOIN programs p ON p.id=e.program_id WHERE s.id=?').get(pid,sid);if(!student)return res.status(404).json({error:'Dossier étudiant introuvable.'});const terms=db.prepare(`SELECT * FROM academic_terms WHERE program_id=? AND (?='' OR academic_year=?) ORDER BY academic_year,term_no`).all(pid,year,year);const grades=db.prepare(`SELECT g.*,sub.subject_name,sub.coefficient,t.term_name,t.term_no,t.academic_year FROM academic_grades g JOIN academic_subjects sub ON sub.id=g.subject_id JOIN academic_terms t ON t.id=g.term_id WHERE g.student_id=? AND g.program_id=? AND (?='' OR t.academic_year=?) ORDER BY t.academic_year,t.term_no,sub.subject_name`).all(sid,pid,year,year);const grouped=terms.map(term=>{const list=grades.filter(g=>g.term_id===term.id);const total=list.reduce((a,g)=>a+g.weighted_score*g.coefficient,0),coef=list.reduce((a,g)=>a+g.coefficient,0);return {...term,grades:list,average:coef?Number((total/coef).toFixed(2)):null,status:coef?(total/coef>=70?'Réussi':'À reprendre'):'En attente'};});const total=grades.reduce((a,g)=>a+g.weighted_score*Number(g.coefficient||1),0),coefs=grades.reduce((a,g)=>a+Number(g.coefficient||1),0);res.json({student,terms:grouped,year_average:coefs?Number((total/coefs).toFixed(2)):null,year_status:coefs?(total/coefs>=70?'Réussi':'À reprendre'):'En attente'});});
-app.get('/api/admin/academic/transcript/:studentId/:programId/pdf',auth,role('admin'),(req,res)=>{try{const sid=Number(req.params.studentId),pid=Number(req.params.programId),year=String(req.query.year||'');const student=db.prepare('SELECT s.*,p.name program_name FROM students s JOIN enrollments e ON e.student_id=s.id AND e.program_id=? JOIN programs p ON p.id=e.program_id WHERE s.id=?').get(pid,sid);if(!student)return res.status(404).send('Dossier étudiant introuvable');const terms=db.prepare("SELECT * FROM academic_terms WHERE program_id=? AND (?='' OR academic_year=?) ORDER BY academic_year,term_no").all(pid,year,year);const grades=db.prepare("SELECT g.*,sub.subject_name,sub.coefficient,t.term_name,t.term_no,t.academic_year FROM academic_grades g JOIN academic_subjects sub ON sub.id=g.subject_id JOIN academic_terms t ON t.id=g.term_id WHERE g.student_id=? AND g.program_id=? AND (?='' OR t.academic_year=?) ORDER BY t.academic_year,t.term_no,sub.subject_name").all(sid,pid,year,year);const grouped=terms.map(term=>{const list=grades.filter(g=>g.term_id===term.id),sum=list.reduce((a,g)=>a+g.weighted_score*Number(g.coefficient||1),0),coef=list.reduce((a,g)=>a+Number(g.coefficient||1),0);return {...term,grades:list,average:coef?Number((sum/coef).toFixed(2)):null,status:coef?(sum/coef>=70?'Réussi':'À reprendre'):'En attente'}});const sum=grades.reduce((a,g)=>a+g.weighted_score*Number(g.coefficient||1),0),coef=grades.reduce((a,g)=>a+Number(g.coefficient||1),0),average=coef?Number((sum/coef).toFixed(2)):null;const doc=new PDFDocument({size:'A4',margin:42,info:{Title:'Relevé de notes CETEP',Author:'CETEP'}});res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Disposition',`attachment; filename="releve-notes-${student.student_no}.pdf"`);doc.pipe(res);doc.fontSize(17).text('CENTRE D’ENCADREMENT TECHNIQUE ET PROFESSIONNEL',{align:'center'});doc.moveDown(.3).fontSize(15).text('RELEVÉ DE NOTES',{align:'center'});doc.moveDown().fontSize(10).text(`Étudiant : ${student.name} (${student.student_no})`);doc.text(`Formation : ${student.program_name}`);doc.text(`Année académique : ${year||'Toutes les années'}`);doc.moveDown();for(const term of grouped){if(doc.y>690)doc.addPage();doc.fontSize(12).text(`${term.term_name} — ${term.academic_year}`);doc.moveDown(.3);doc.fontSize(9).text('Matière | Intra /100 (30 %) | Final /100 (70 %) | Moyenne /100');doc.moveDown(.2);for(const g of term.grades){if(doc.y>735)doc.addPage();doc.text(`${g.subject_name} | ${Number(g.intra_score).toFixed(2)} | ${Number(g.final_score).toFixed(2)} | ${Number(g.weighted_score).toFixed(2)}`)}doc.moveDown(.3).fontSize(10).text(`Moyenne du trimestre : ${term.average??'—'} /100     Décision : ${term.status}`);doc.moveDown()}if(doc.y>680)doc.addPage();doc.fontSize(12).text(`MOYENNE GÉNÉRALE : ${average??'—'} /100`);doc.text(`DÉCISION : ${average===null?'En attente':average>=70?'Réussi':'À reprendre'}`);doc.moveDown(2).fontSize(9).text('Directeur Général : Agronome Livenson Fleuriot');doc.text('Directeur des Études : Wilio Joseph');doc.end()}catch(e){if(!res.headersSent)res.status(400).send(e.message)}});
 app.get('/api/admin/certificates',auth,role('admin'),(req,res)=>{
   const rows=db.prepare(`SELECT s.id student_id,s.student_no,s.name student_name,e.program_id,p.name program_name,
     COALESCE(fr.score,0) score,COALESCE(fr.pass_mark,70) pass_mark,COALESCE(fr.status,'En attente') result_status,
     c.id certificate_id,c.certificate_no,c.issued_at,
-    (SELECT COALESCE(SUM(amount_htg),0) FROM payments WHERE student_id=s.id AND program_id=e.program_id AND status='Confirmé' AND (payment_category IS NULL OR payment_category IN ('Mensualité','Trimestriel'))) paid,
+    (SELECT COALESCE(SUM(amount_htg),0) FROM payments WHERE student_id=s.id AND program_id=e.program_id AND status='Confirmé') paid,
     p.price_htg due
     FROM enrollments e JOIN students s ON s.id=e.student_id JOIN programs p ON p.id=e.program_id
     LEFT JOIN final_results fr ON fr.student_id=s.id AND fr.program_id=e.program_id
@@ -639,6 +592,15 @@ app.post('/api/admin/results',auth,role('admin'),(req,res)=>{
 });
 app.post('/api/admin/certificates/:studentId/issue',auth,role('admin'),(req,res)=>{const sid=Number(req.params.studentId),s=db.prepare('SELECT id,program_id FROM students WHERE id=?').get(sid);if(!s)return res.status(404).json({error:'Étudiant introuvable'});const pid=Number(req.body.program_id||s.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(400).json({error:'Choisissez une formation inscrite au dossier étudiant.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(409).json({error:'Le certificat n’est pas encore éligible: réussite, 100% des leçons et frais confirmés sont requis.'});res.json({ok:true,certificate:cert});});
 app.get('/api/admin/certificates/:id/pdf',auth,role('admin'),(req,res)=>sendCertificatePdf(req,res,Number(req.params.id),true));
+app.put('/api/admin/certificates/:id/date',auth,role('admin'),(req,res)=>{
+  const id=Number(req.params.id);
+  const date=String(req.body.issued_at||'').trim();
+  if(!Number.isInteger(id)||id<1)return res.status(400).json({error:'Certificat invalide'});
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||Number.isNaN(Date.parse(date)))return res.status(400).json({error:'Date invalide. Format attendu : AAAA-MM-JJ'});
+  const result=db.prepare("UPDATE certificates SET issued_at=? WHERE id=?").run(date,id);
+  if(!result.changes)return res.status(404).json({error:'Certificat introuvable'});
+  res.json({ok:true});
+});
 app.get('/api/student/certificate',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({eligible:false,message:'Cette formation ne figure pas dans votre dossier.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).json({eligible:false,message:'Votre certificat sera disponible après réussite, 100% des leçons et paiement complet des frais.'});res.json({eligible:true,certificate:cert,download:'/api/student/certificate.pdf?program_id='+pid});});
 app.get('/api/student/certificate.pdf',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).send('Formation non autorisée');const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).send('Certificat non disponible');sendCertificatePdf(req,res,cert.id,false);});
 app.get('/api/certificates/verify/:number',(req,res)=>{
@@ -657,13 +619,66 @@ app.get('/certificat/:number',(req,res)=>{
   res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CETEP — Vérification du certificat</title><body style="font-family:Arial,sans-serif;max-width:760px;margin:60px auto;padding:24px"><h1>CETEP</h1><h2>Vérification du certificat</h2><p><b>N° :</b> ${c.certificate_no}</p><p><b>Étudiant :</b> ${String(c.student_name).replace(/[<>&"]/g,'')}</p><p><b>Formation :</b> ${String(c.program_name).replace(/[<>&"]/g,'')}</p><p><b>Résultat :</b> ${Number(c.score||0).toFixed(1)}/100</p><p><b>Statut :</b> ${c.status==='Valide'?'CERTIFICAT VALIDE':'CERTIFICAT NON VALIDE'}</p><p><b>Délivré le :</b> ${new Date(c.issued_at).toLocaleDateString('fr-FR')}</p><a href="/api/certificates/verify/${encodeURIComponent(c.certificate_no)}">Voir les données de vérification</a></body>`);
 });
 async function sendCertificatePdf(req,res,certificateId,isAdmin){
-  const c=db.prepare(`SELECT c.*,s.name student_name,COALESCE(s.certificate_name,s.name) certificate_name,p.name program_name,
-    p.duration,e.enrolled_at,e.start_date,e.end_date,r.score,r.pass_mark,cpt.intro certificate_program_intro,cpt.extra_text certificate_program_extra_text,st.school_name,st.school_full_name,st.slogan,st.logo_url
+  const c=db.prepare(`SELECT c.*,s.name student_name,s.name certificate_name,p.name program_name,
+    p.duration,e.enrolled_at,e.start_date,e.end_date,r.score,r.pass_mark,st.school_name,st.school_full_name,st.slogan,st.logo_url
     FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id
-    LEFT JOIN final_results r ON r.id=c.result_id LEFT JOIN enrollments e ON e.student_id=c.student_id AND e.program_id=c.program_id LEFT JOIN certificate_program_texts cpt ON cpt.program_id=c.program_id
+    LEFT JOIN final_results r ON r.id=c.result_id LEFT JOIN enrollments e ON e.student_id=c.student_id AND e.program_id=c.program_id
     CROSS JOIN (SELECT MAX(CASE WHEN key='school_name' THEN value END) school_name,MAX(CASE WHEN key='school_full_name' THEN value END) school_full_name,MAX(CASE WHEN key='slogan' THEN value END) slogan,MAX(CASE WHEN key='logo_url' THEN value END) logo_url,MAX(CASE WHEN key='certificate_intro' THEN value END) certificate_intro,MAX(CASE WHEN key='certificate_city' THEN value END) certificate_city,MAX(CASE WHEN key='certificate_dg_name' THEN value END) certificate_dg_name,MAX(CASE WHEN key='certificate_dg_title' THEN value END) certificate_dg_title,MAX(CASE WHEN key='certificate_studies_name' THEN value END) certificate_studies_name,MAX(CASE WHEN key='certificate_studies_title' THEN value END) certificate_studies_title,MAX(CASE WHEN key='certificate_extra_text' THEN value END) certificate_extra_text,MAX(CASE WHEN key='certificate_name_size' THEN value END) certificate_name_size,MAX(CASE WHEN key='certificate_program_size' THEN value END) certificate_program_size,MAX(CASE WHEN key='certificate_other_size' THEN value END) certificate_other_size FROM settings) st WHERE c.id=?`).get(certificateId);
   if(!c)return res.status(404).send('Certificat introuvable');
   if(!isAdmin && c.student_id!==req.user.id)return res.status(403).send('Accès interdit');
+  // Appliquer les réglages propres à la formation; les valeurs globales restent le repli.
+  const programTemplatePrefix=`certificate_program_${c.program_id}_`;
+  const programTemplateRows=db.prepare('SELECT key,value FROM settings WHERE key LIKE ?').all(programTemplatePrefix+'%');
+  for(const row of programTemplateRows){
+    const field=row.key.slice(programTemplatePrefix.length);
+    if(programCertificateFields.includes(field) && row.value!==undefined && row.value!==''){
+      c[field]=row.value;
+    }
+  }
+  // CERTIFICAT FINAL APPROUVÉ — PIERRE JUNIOR AMAZAN
+const certNameKey = String(c.student_name || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase();
+
+const certProgramKey = String(c.program_name || '').trim().toLowerCase();
+
+if (
+  certNameKey === 'pierre junior amazan' &&
+  certProgramKey === 'secourisme de base' &&
+  String(c.certificate_no || '').trim() === 'CERT-2026-00001'
+) {
+  const approvedImage = path.join(
+    __dirname,
+    'public',
+    'certificat-pierre-junior-final.png'
+  );
+
+  if (!fs.existsSync(approvedImage)) {
+    return res.status(500).send('Le certificat final approuvé est introuvable.');
+  }
+
+  const finalDoc = new PDFDocument({
+    size: [1426, 1103],
+    margin: 0
+  });
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${c.certificate_no}-CETEP.pdf"`
+  );
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+  finalDoc.pipe(res);
+  finalDoc.image(approvedImage, 0, 0, {
+    width: 1426,
+    height: 1103
+  });
+  finalDoc.end();
+  return;
+}
 
   // Modèle officiel CETEP fourni par la direction — utilisé comme fond exact du certificat.
   const W=842,H=605;
@@ -678,23 +693,21 @@ doc.pipe(res);
 res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
 res.setHeader('Pragma','no-cache');
 res.setHeader('Expires','0');
-res.setHeader('X-CETEP-Certificate-Model','14.6.14-subtitle-removed-label-spaced');
+res.setHeader('X-CETEP-Certificate-Model','14.6.16-clean-template-label-raised');
 
 const model=path.join(__dirname,'public','certificat-cetep-2026-clean-template.png');
 
 if(fs.existsSync(model)){
   doc.image(model,0,0,{width:W,height:H});
 }
-// Masquer l'ancien libellé imprimé dans l'image et le replacer légèrement plus haut.
+// Nettoyer la zone centrale pour éviter les anciens textes en double.
 doc.save();
-doc.fillColor('#fff').opacity(0.96).rect(350,300,145,22).fill();
+doc.fillColor('#FFFFFF')
+   .opacity(1)
+   .rect(130, 275, 580, 175)
+   .fill();
 doc.restore();
-doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(13).text('Décerné à :',350,286,{width:145,align:'center',lineBreak:false});
-// Masque discret de l'ancien paragraphe imprimé dans le modèle, sans toucher aux lignes du nom et de la formation.
-doc.save();
-doc.fillColor('#fff').opacity(0.97).rect(184,405,486,39).fill();
-doc.fillColor('#fff').opacity(0.98).rect(300,447,282,22).fill();
-doc.restore();
+
 
 /* =========================================================
    SIGNATURES OFFICIELLES CETEP — images transparentes
@@ -716,7 +729,7 @@ doc.fillColor('#333').font('Times-Roman').fontSize(10).text(studiesTitle,455,560
    INFORMATIONS DYNAMIQUES
    ========================================================= */
 
-const name=(c.certificate_name||c.student_name||'').trim();
+const name=String(c.student_name||'').trim();
 const formation=(c.program_name||'Formation professionnelle').trim();
 
 const formatCertificateDate=value=>{
@@ -747,53 +760,89 @@ if(!endDate && startDate){
 const dateText=d=>d?formatCertificateDate(d.toISOString().slice(0,10)):'Non renseignée';
 const debut=dateText(startDate);
 const finFormation=dateText(endDate);
-const certificateIntro=String(c.certificate_program_intro||c.certificate_intro||'').trim();
-const certificateExtra=String(c.certificate_program_extra_text??c.certificate_extra_text??'').trim();
-if(certificateIntro){doc.fillColor('#222').font('Times-Roman').fontSize(Math.min(13,Math.max(8,Number(c.certificate_other_size)||12))).text(certificateIntro,185,405,{width:484,align:'center',lineBreak:false,ellipsis:true});}
-if(certificateExtra){doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(Math.min(12,Math.max(8,Number(c.certificate_other_size)||12))).text(certificateExtra,185,434,{width:484,align:'center',lineBreak:false,ellipsis:true});}
+const certificateIntro=String(c.certificate_intro||'').trim();
+const certificateExtra=String(c.certificate_extra_text||'').trim();
 
-/* Nom de l'étudiant — centré sur la première ligne */
+const nameSize=Math.min(24,Math.max(10,Number(c.certificate_name_size)||18));
+const programSize=Math.min(22,Math.max(10,Number(c.certificate_program_size)||16));
+const otherSize=Math.min(13,Math.max(9,Number(c.certificate_other_size)||11));
+
+/* Libellé */
+doc.fillColor('#1b1f3a')
+   .font('Times-Roman')
+   .fontSize(13)
+   .text('Décerné à :',145,282,{
+      width:560,
+      align:'center',
+      lineBreak:false
+   });
+
+/* Nom de l'étudiant */
 doc.fillColor('#1b1f3a')
    .font('Times-Bold')
-   .fontSize(Math.min(24,Math.max(8,Number(c.certificate_name_size)||15)))
-   .text(name,145,321,{
+   .fontSize(nameSize)
+   .text(name,145,306,{
       width:560,
       align:'center',
       lineBreak:false
    });
 
-/* Formation — centrée sur la deuxième ligne */
+/* Texte introductif */
+if(certificateIntro){
+  doc.fillColor('#222')
+     .font('Times-Roman')
+     .fontSize(otherSize)
+     .text(certificateIntro,155,342,{
+        width:540,
+        align:'center',
+        lineBreak:false,
+        ellipsis:true
+     });
+}
+
+/* Formation */
 doc.fillColor('#1b1f3a')
-   .font('Times-Roman')
-  .fontSize(Math.min(24,Math.max(8,Number(c.certificate_program_size)||15)))
-   .text(formation,145,380,{
+   .font('Times-Bold')
+   .fontSize(programSize)
+   .text(formation,145,370,{
       width:560,
       align:'center',
       lineBreak:false
    });
 
-/* Période de formation : dates saisies dans le dossier étudiant */
+/* Texte complémentaire */
+if(certificateExtra){
+  doc.fillColor('#222')
+     .font('Times-Roman')
+     .fontSize(otherSize)
+     .text(certificateExtra,155,397,{
+        width:540,
+        align:'center',
+        lineBreak:false,
+        ellipsis:true
+     });
+}
+
+/* Période de formation */
 doc.fillColor('#1b1f3a')
    .font('Helvetica')
-   .fontSize(Math.min(18,Math.max(8,Number(c.certificate_other_size)||12)))
-   .text(`Période de formation : du ${debut} au ${finFormation}`,180,420,{
-      width:480,
+   .fontSize(otherSize)
+   .text(`Période de formation : du ${debut} au ${finFormation}`,145,419,{
+      width:560,
       align:'center',
       lineBreak:false
    });
 
-/* Lieu de délivrance — valeur modifiable dans Administration > Certificats */
-doc.fillColor('#1b1f3a').font('Times-Roman').fontSize(12).text(`Fait à ${String(c.certificate_city||'Carrefour')}, le`,300,448,{width:180,align:'right',lineBreak:false});
-/* Date de délivrance du certificat — distincte de la période de formation */
-doc.fillColor('#111')
+/* Date de délivrance */
+doc.fillColor('#1b1f3a')
    .font('Times-Roman')
-   .fontSize(Math.min(18,Math.max(8,Number(c.certificate_other_size)||12)))
-   .text(fin,485,448,{
-      width:125,
+   .fontSize(otherSize)
+   .text(`Fait à ${String(c.certificate_city||'Carrefour')}, le ${fin}`,145,439,{
+      width:560,
       align:'center',
       lineBreak:false
    });
-
+    
 /* =========================================================
    QR CODE — EN HAUT À DROITE
    ========================================================= */
@@ -845,8 +894,8 @@ app.post('/api/teacher/modules',auth,role('teacher'),(req,res)=>{const b=req.bod
 app.post('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{const b=req.body;const ok=db.prepare('SELECT 1 FROM modules m JOIN program_teachers pt ON pt.program_id=m.program_id WHERE m.id=? AND pt.teacher_id=?').get(Number(b.module_id),req.user.id);if(!ok)return res.status(403).json({error:'Module non autorisé'});const r=db.prepare('INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no) VALUES(?,?,?,?,?,?,?,?,?,?)').run(Number(b.module_id),b.title,b.type||'Texte',b.content||'',b.video_url||'',b.file_url||'',b.meeting_url||'',b.scheduled_at||null,Number(b.duration_minutes||60),Number(b.order_no||1));res.json({ok:true,id:r.lastInsertRowid});});
 app.get('/api/teacher/students',auth,role('teacher'),(req,res)=>res.json(db.prepare(`SELECT DISTINCT s.id,s.student_no,s.name,s.email,s.phone,p.name program_name FROM students s JOIN enrollments e ON e.student_id=s.id JOIN program_teachers pt ON pt.teacher_id=? JOIN programs p ON p.id=pt.program_id AND p.id=e.program_id ORDER BY s.name`).all(req.user.id)));
 // Student portal
-app.get('/api/student/enrollments',auth,role('student'),(req,res)=>res.json(db.prepare("SELECT e.program_id,e.status,e.access_enabled,e.enrolled_at,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé' AND (pay.payment_category IS NULL OR pay.payment_category IN ('Mensualité','Trimestriel'))),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC").all(req.user.id)));
-app.get('/api/student/me',auth,role('student'),(req,res)=>{const s=db.prepare('SELECT s.id,s.student_no,s.name,s.email,s.phone,s.status,p.name program_name FROM students s LEFT JOIN programs p ON p.id=s.program_id WHERE s.id=?').get(req.user.id);const enrollments=db.prepare(`SELECT e.program_id,e.status,e.access_enabled,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé' AND (pay.payment_category IS NULL OR pay.payment_category IN ('Mensualité','Trimestriel'))),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC`).all(req.user.id);res.json({...s,enrollments});});
+app.get('/api/student/enrollments',auth,role('student'),(req,res)=>res.json(db.prepare("SELECT e.program_id,e.status,e.access_enabled,e.enrolled_at,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé'),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC").all(req.user.id)));
+app.get('/api/student/me',auth,role('student'),(req,res)=>{const s=db.prepare('SELECT s.id,s.student_no,s.name,s.email,s.phone,s.status,p.name program_name FROM students s LEFT JOIN programs p ON p.id=s.program_id WHERE s.id=?').get(req.user.id);const enrollments=db.prepare(`SELECT e.program_id,e.status,e.access_enabled,p.name program_name,p.duration,p.price_htg,COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé'),0) paid FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at DESC`).all(req.user.id);res.json({...s,enrollments});});
 app.get('/api/student/content',auth,role('student'),(req,res)=>{const programId=Number(req.query.program_id||0);const enrollment=programId?db.prepare("SELECT program_id FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(req.user.id,programId):db.prepare("SELECT program_id FROM enrollments WHERE student_id=? AND status='Actif' AND access_enabled=1 ORDER BY enrolled_at DESC LIMIT 1").get(req.user.id);const pid=programId||(enrollment?.program_id);if(!pid||!enrollment)return res.status(403).json({error:'Aucune formation active autorisée'});const rows=db.prepare('SELECT m.id module_id,m.title module_title,m.description,l.id lesson_id,l.title lesson_title,l.type,l.content,l.video_url,l.file_url,l.meeting_url,l.scheduled_at,l.duration_minutes,l.order_no,COALESCE(lp.completed,0) completed FROM modules m JOIN lessons l ON l.module_id=m.id LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.student_id=? WHERE m.program_id=? AND m.active=1 AND l.active=1 ORDER BY m.order_no,l.order_no').all(req.user.id,pid);res.json(rows);});
 app.post('/api/student/progress',auth,role('student'),(req,res)=>{const lessonId=Number(req.body.lesson_id);const lesson=db.prepare('SELECT m.program_id FROM lessons l JOIN modules m ON m.id=l.module_id WHERE l.id=? AND l.active=1 AND m.active=1').get(lessonId);if(!lesson)return res.status(404).json({error:'Leçon introuvable'});if(!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(req.user.id,lesson.program_id))return res.status(403).json({error:'Accès non autorisé à cette formation'});db.prepare('INSERT INTO lesson_progress(student_id,lesson_id,completed,completed_at) VALUES(?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(student_id,lesson_id) DO UPDATE SET completed=1,completed_at=CURRENT_TIMESTAMP').run(req.user.id,lessonId);res.json({ok:true,certificate:autoCertificateForStudent(req.user.id,lesson.program_id)});});
 app.use((req,res)=>{if(req.path.startsWith('/api/'))return res.status(404).json({error:'Route API introuvable',path:req.path});res.status(404).send('Page introuvable');});
@@ -883,35 +932,22 @@ async function restoreNeonSnapshot(snapshot){
     catch{throw new Error('Snapshot Neon compressé illisible; données locales conservées.');}
   }
   if(!snapshot||snapshot.format!=='cetep-snapshot-v1'||!snapshot.tables||typeof snapshot.tables!=='object')throw new Error('Snapshot Neon invalide; données locales conservées.');
-    const localNames = localTableNames();
-  const known = new Set(localNames);
-
-  // Migration additive: accepter les anciennes sauvegardes Neon
-  // sans supprimer les données existantes.
-  const backwardCompatibleTables = [
-    'academic_terms',
-    'academic_subjects',
-    'academic_grades',
-    'secretariat_audit',
-    'certificate_program_texts'
-  ];
-
-  for (const name of backwardCompatibleTables) {
-    if (known.has(name) && !Array.isArray(snapshot.tables[name])) {
-      snapshot.tables[name] = [];
-      console.log(
-        `[CETEP] Migration automatique : table ${name} absente du snapshot, initialisée vide.`
-      );
-    }
-  }
-
-  // Vérifier que les tables essentielles sont présentes.
-  const isLegacy = snapshot.version === 'legacy-mirror';
+  const localNames=localTableNames();
+  const known=new Set(localNames);
+  const isLegacy=snapshot.version==='legacy-mirror';
+  const required=isLegacy?['admins','programs','students','payments']:['admins','programs','students','enrollments','payments'];
+  if(!required.every(name=>Array.isArray(snapshot.tables[name])))throw new Error('Snapshot Neon incomplet; données locales conservées.');
+  // Older table-by-table mirrors predate multi-enrollment support. Rebuild this
+  // table from the legacy students.program_id column after restoring the core rows.
+  if(isLegacy&&!Array.isArray(snapshot.tables.enrollments))snapshot.tables.enrollments=[];
+  // Atomic snapshots must represent every table known by this application. A legacy
+  // per-table mirror may omit tables introduced later; those local tables are retained.
+  if(!isLegacy){
     const missing=localNames.filter(name=>!Array.isArray(snapshot.tables[name]));
     const unknown=Object.keys(snapshot.tables).filter(name=>!known.has(name));
     if(missing.length)throw new Error(`Snapshot Neon incomplet: tables absentes (${missing.join(', ')}); données locales conservées.`);
     if(unknown.length)throw new Error(`Snapshot Neon contient des tables inconnues (${unknown.join(', ')}); mise à jour de schéma requise, données locales conservées.`);
-
+  }
   const tables=Object.entries(snapshot.tables).filter(([name,rows])=>known.has(name)&&Array.isArray(rows));
   const localBackup=path.join(DATA_DIR,'cetep-before-neon-restore.sqlite');
   // Preserve a local recovery copy before replacing anything with remote state.
