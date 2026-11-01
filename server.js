@@ -312,8 +312,24 @@ for(const d of [
  }
 }
 function settings(){return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(x=>[x.key,x.value]));}
-function sign(p){return jwt.sign(p,SECRET,{expiresIn:'12h'});}function auth(req,res,next){try{const t=req.cookies.cetep_token;if(!t)throw 0;req.user=jwt.verify(t,SECRET);next();}catch{res.status(401).json({error:'Non autorisé'});}}
-function role(...roles){return (req,res,next)=>roles.includes(req.user?.role)?next():res.status(403).json({error:'Accès interdit'});}
+function sign(p){return jwt.sign(p,SECRET,{expiresIn:'12h'});}
+function auth(req,res,next){
+  try{
+    const t=req.cookies.cetep_token;if(!t)throw 0;
+    req.user=jwt.verify(t,SECRET);
+    // Recheck privileged accounts against the database on every request so a
+    // disabled secretary/admin loses access immediately, even with an old JWT.
+    if(['admin','secretary'].includes(req.user.role)){
+      const account=db.prepare('SELECT role,active FROM admins WHERE id=? AND lower(email)=lower(?)').get(Number(req.user.id),String(req.user.email||''));
+      if(!account||account.role!==req.user.role||Number(account.active)!==1){
+        res.clearCookie('cetep_token');
+        return res.status(401).json({error:'Compte désactivé ou session révoquée. Reconnectez-vous.'});
+      }
+    }
+    next();
+  }catch{res.status(401).json({error:'Non autorisé'});}
+}
+function role(...roles){return (req,res,next)=>roles.includes(req.user?.role)?next():res.status(403).json({error:'Accès interdit'});} 
 function nextNo(prefix,table,col){let n=db.prepare(`SELECT COUNT(*) c FROM ${table}`).get().c+1;let x=`${prefix}-${new Date().getFullYear()}-${String(n).padStart(4,'0')}`;while(db.prepare(`SELECT 1 FROM ${table} WHERE ${col}=?`).get(x)){n++;x=`${prefix}-${new Date().getFullYear()}-${String(n).padStart(4,'0')}`;}return x;}
 
 function certificateNo(){
@@ -844,8 +860,8 @@ async function restoreNeonSnapshot(snapshot){
   const localNames=localTableNames();
   const known=new Set(localNames);
   // Backward-compatible additive migration: older production snapshots predate
-  // the academic module. Create empty collections locally; never drop legacy rows.
-  for(const name of ['academic_terms','academic_subjects','academic_grades']){
+  // the academic module and secretariat audit table. Create empty collections locally; never drop legacy rows.
+  for(const name of ['academic_terms','academic_subjects','academic_grades','secretariat_audit']){
     if(known.has(name)&&!Array.isArray(snapshot.tables[name]))snapshot.tables[name]=[];
   }
   const isLegacy=snapshot.version==='legacy-mirror';
