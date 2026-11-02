@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.7.6-modele-officiel-qr-individuel';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();const APP_VERSION='14.7.8-modele-approuve-cetep';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -418,7 +418,7 @@ app.get('/health',async(req,res)=>{
   res.status(status.ok?200:503).json(status);
 });
 function sendPage(res,file){const pub=path.join(__dirname,'public',file);const root=path.join(__dirname,file);if(fs.existsSync(pub))return res.sendFile(pub);if(fs.existsSync(root))return res.sendFile(root);return res.status(404).send('Page introuvable: '+file);}
-app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-modele-officiel-dynamique.png',certificate_model_version:'14.7.6-modele-officiel-qr-individuel',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-modele-officiel-dynamique.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.7.7-official-dynamic-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/secretariat',(req,res)=>sendPage(res,'secretary.html'));app.get('/secretary',(req,res)=>res.redirect('/secretariat'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
+app.get('/api/version',(req,res)=>res.json({version:APP_VERSION,certificate_model:'certificat-cetep-modele-officiel-dynamique.png',certificate_model_version:'14.7.8-modele-approuve-cetep',homepage_promotions:true}));app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public','certificat-cetep-modele-officiel-dynamique.png');if(!fs.existsSync(model))return res.status(404).send('Modèle officiel introuvable');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':'14.7.8-approved-certificate-template'});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/secretariat',(req,res)=>sendPage(res,'secretary.html'));app.get('/secretary',(req,res)=>res.redirect('/secretariat'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
 function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||a.role!=='admin'||Number(a.active)!==1||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
 function secretaryLogin(req,res){const a=db.prepare("SELECT * FROM admins WHERE email=? AND role='secretary' AND active=1").get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants secrétariat invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'secretary'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/secretariat'});}
 app.post('/api/secretary/login',secretaryLogin);
@@ -731,7 +731,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 
   // Modèle officiel CETEP approuvé : décorations, signatures, logos et sceau conservés.
   // Le fond est au format 1422x1106; le PDF conserve exactement le même ratio.
-  const W=842,H=655;
+  const W=842,H=651.5;
   // Vérifier le fichier AVANT d'ouvrir le flux PDF vers la réponse HTTP.
   // Sinon doc.end() puis res.send() provoque ERR_STREAM_WRITE_AFTER_END.
   const model=path.join(__dirname,'public','certificat-cetep-modele-officiel-dynamique.png');
@@ -744,7 +744,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   res.setHeader('Content-Disposition',`attachment; filename="${c.certificate_no}-CETEP-2026.pdf"`);
   res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, private');
   res.setHeader('Pragma','no-cache');res.setHeader('Expires','0');
-  res.setHeader('X-CETEP-Certificate-Model','14.7.7-modele-officiel-dynamique');
+  res.setHeader('X-CETEP-Certificate-Model','14.7.8-modele-approuve-cetep');
   doc.on('error',err=>{console.error('[CETEP] Erreur génération PDF:',err);if(!res.headersSent)res.status(500).end('Erreur génération certificat');else if(!res.destroyed)res.destroy(err);});
   doc.pipe(res);
   doc.image(model,0,0,{width:W,height:H});
@@ -784,42 +784,52 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   const center={align:'center'};
   doc.fillColor('#101b45').font('Times-Bold')
     .fontSize(safeSize(c.certificate_name_size,22,14,25))
-    .text(name,205,298,{width:432,height:36,align:'center',lineBreak:false,ellipsis:true});
+    .text(name,205,310,{width:432,height:34,align:'center',lineBreak:false,ellipsis:true});
 
   doc.fillColor('#101b45').font('Times-Bold')
     .fontSize(safeSize(c.certificate_program_size,21,14,23))
-    .text(formation,205,360,{width:432,height:34,align:'center',lineBreak:false,ellipsis:true});
+    .text(formation,220,373,{width:402,height:32,align:'center',lineBreak:false,ellipsis:true});
 
   // Texte descriptif : hauteur mesurée, puis le texte complémentaire suit sans recouvrir.
-  const paragraphX=178, paragraphW=486, paragraphFont= safeSize(c.certificate_other_size,11,9,12);
-  let cursorY=397;
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(paragraphFont);
-  const introOpts={width:paragraphW,align:'center',lineGap:1.5};
-  const introHeight=doc.heightOfString(intro,introOpts);
-  doc.text(intro,paragraphX,cursorY,introOpts);
-  cursorY+=introHeight+5;
+  const paragraphX=178, paragraphW=486, paragraphY=405;
+  let paragraphFont=safeSize(c.certificate_other_size,11,8.5,12);
+  const measureParagraph=()=>{
+    doc.font('Times-Roman').fontSize(paragraphFont);
+    const introOpts={width:paragraphW,align:'center',lineGap:1.2};
+    const introHeight=doc.heightOfString(intro,introOpts);
+    const extraFont=Math.max(8.5,paragraphFont-0.5);
+    doc.font('Times-Roman').fontSize(extraFont);
+    const extraOpts={width:paragraphW,align:'center',lineGap:0.8};
+    const extraHeight=extra?doc.heightOfString(extra,extraOpts):0;
+    return {introOpts,extraOpts,introHeight,extraHeight,extraFont,total:introHeight+(extra?extraHeight+3:0)};
+  };
+  let measured=measureParagraph();
+  while(measured.total>49 && paragraphFont>8.5){paragraphFont=Math.max(8.5,paragraphFont-0.5);measured=measureParagraph();}
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(paragraphFont)
+    .text(intro,paragraphX,paragraphY,measured.introOpts);
   if(extra){
-    doc.fillColor('#101b45').font('Times-Roman').fontSize(Math.max(9,paragraphFont-0.5));
-    const extraOpts={width:paragraphW,align:'center',lineGap:1};
-    const extraHeight=doc.heightOfString(extra,extraOpts);
-    doc.text(extra,paragraphX,cursorY,extraOpts);
-    cursorY+=extraHeight+5;
+    doc.fillColor('#101b45').font('Times-Roman').fontSize(measured.extraFont)
+      .text(extra,paragraphX,paragraphY+measured.introHeight+3,measured.extraOpts);
   }
 
-  // Les informations de durée et la date sont placées dans la zone basse réservée.
-  const metaY=Math.min(476,Math.max(455,cursorY+4));
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(10)
-    .text(period,155,metaY,{width:532,height:18,align:'center',lineBreak:false,ellipsis:true});
+  // Les valeurs variables sont alignées sur les libellés déjà imprimés dans le modèle.
+  // Le libellé « Durée de la formation » et « Période de formation » restent dans le fond.
+  const duration=String(c.duration||'').trim()||'Selon le programme';
+  const periodValue=`du ${fmt(start)} au ${fmt(finish)}`;
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(10.5)
+    .text(duration,355,471,{width:125,height:16,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(10.2)
+    .text(periodValue,515,471,{width:215,height:16,align:'center',lineBreak:false,ellipsis:true});
   doc.fillColor('#101b45').font('Times-Roman').fontSize(11)
-    .text(`Fait à ${city}, le ${issued}`,230,metaY+23,{width:382,height:18,align:'center',lineBreak:false,ellipsis:true});
+    .text(`Fait à ${city}, le ${issued}`,230,490,{width:382,height:18,align:'center',lineBreak:false,ellipsis:true});
 
-  // QR code individuel: chaque certificat renvoie vers sa propre page de vérification.
+  // QR code individuel placé dans le cartouche supérieur droit du modèle approuvé.
   const base=(process.env.PUBLIC_BASE_URL||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');
   const verifyUrl=`${base}/certificat/${encodeURIComponent(c.certificate_no)}`;
   const qr=await QRCode.toBuffer(verifyUrl,{type:'png',errorCorrectionLevel:'H',margin:1,width:240,color:{dark:'#000000',light:'#ffffff'}});
-  doc.image(qr,704,34,{width:76,height:76});
+  doc.image(qr,713,42,{width:74,height:74});
   doc.fillColor('#111').font('Helvetica-Bold').fontSize(6.8)
-    .text(String(c.certificate_no),680,112,{width:118,align:'center',lineBreak:false,ellipsis:true});
+    .text(String(c.certificate_no),710,118,{width:80,align:'center',lineBreak:false,ellipsis:true});
   doc.end();
 }
 
