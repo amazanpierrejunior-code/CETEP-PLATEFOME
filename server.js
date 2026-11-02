@@ -432,7 +432,54 @@ app.post('/api/logout',(req,res)=>{res.clearCookie('cetep_token');res.json({ok:t
 app.get('/api/admin/secretaries',auth,role('admin'),(req,res)=>res.json(db.prepare("SELECT id,email,active,created_at FROM admins WHERE role='secretary' ORDER BY id DESC").all()));
 app.get('/api/admin/secretariat-audit',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM secretariat_audit ORDER BY id DESC LIMIT 200').all()));
 app.post('/api/admin/secretaries',auth,role('admin'),(req,res)=>{const email=String(req.body.email||'').trim().toLowerCase(),password=String(req.body.password||'');if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return res.status(400).json({error:'Adresse email invalide.'});if(password.length<12)return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});try{const r=db.prepare("INSERT INTO admins(email,password_hash,role,active) VALUES(?,?,'secretary',1)").run(email,bcrypt.hashSync(password,12));db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,'CREATE_ACCOUNT','secretary',?,?)").run(req.user.id,req.user.email,r.lastInsertRowid,JSON.stringify({email}));res.status(201).json({ok:true,id:r.lastInsertRowid,email});}catch(e){res.status(409).json({error:'Cet email est déjà utilisé.'});}});
-app.patch('/api/admin/secretaries/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),a=db.prepare("SELECT id,email FROM admins WHERE id=? AND role='secretary'").get(id);if(!a)return res.status(404).json({error:'Compte secrétaire introuvable.'});const active=req.body.active===false||req.body.active===0?0:1;db.prepare('UPDATE admins SET active=? WHERE id=?').run(active,id);if(req.body.password){const pw=String(req.body.password);if(pw.length<12)return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});db.prepare('UPDATE admins SET password_hash=? WHERE id=?').run(bcrypt.hashSync(pw,12),id);}db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,?,'secretary',?,?)").run(req.user.id,req.user.email,active?'ACTIVATE_ACCOUNT':'DEACTIVATE_ACCOUNT',id,JSON.stringify({active,password_changed:!!req.body.password}));res.json({ok:true,active});});
+app.patch('/api/admin/secretaries/:id',auth,role('admin'),(req,res)=>{
+  const id=Number(req.params.id);
+  const account=db.prepare("SELECT id,email,active FROM admins WHERE id=? AND role='secretary'").get(id);
+  if(!account)return res.status(404).json({error:'Compte secrétaire introuvable.'});
+
+  const body=req.body||{};
+  const hasEmail=Object.prototype.hasOwnProperty.call(body,'email');
+  const hasActive=Object.prototype.hasOwnProperty.call(body,'active');
+  const hasPassword=Object.prototype.hasOwnProperty.call(body,'password');
+  const email=hasEmail?String(body.email||'').trim().toLowerCase():account.email;
+  const password=hasPassword?String(body.password||''):'';
+  const active=hasActive?(body.active===false||body.active===0?0:1):Number(account.active);
+
+  if(hasEmail && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))
+    return res.status(400).json({error:'Adresse email invalide.'});
+  if(hasPassword && password.length>0 && password.length<12)
+    return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});
+  if(hasEmail && email!==account.email){
+    const conflict=db.prepare("SELECT id FROM admins WHERE lower(email)=lower(?) AND id<>? LIMIT 1").get(email,id);
+    if(conflict)return res.status(409).json({error:'Cet email est déjà utilisé par un autre compte.'});
+  }
+
+  try{
+    const update=db.transaction(()=>{
+      if(hasEmail)db.prepare('UPDATE admins SET email=? WHERE id=?').run(email,id);
+      if(hasActive)db.prepare('UPDATE admins SET active=? WHERE id=?').run(active,id);
+      if(hasPassword && password)db.prepare('UPDATE admins SET password_hash=? WHERE id=?').run(bcrypt.hashSync(password,12),id);
+
+      const actions=[];
+      if(hasEmail && email!==account.email)actions.push('email_changed');
+      if(hasActive && active!==Number(account.active))actions.push(active?'ACTIVATE_ACCOUNT':'DEACTIVATE_ACCOUNT');
+      if(hasPassword && password)actions.push('password_changed');
+      if(actions.length){
+        db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,?,'secretary',?,?)")
+          .run(req.user.id,req.user.email,actions.join('+'),id,JSON.stringify({
+            old_email:account.email,new_email:email,email_changed:hasEmail&&email!==account.email,
+            active,password_changed:hasPassword&&!!password
+          }));
+      }
+    });
+    update();
+    res.json({ok:true,id,email,active,email_changed:hasEmail&&email!==account.email});
+  }catch(error){
+    if(String(error.message).includes('UNIQUE constraint failed'))return res.status(409).json({error:'Cet email est déjà utilisé.'});
+    console.error('[CETEP SECRETARY UPDATE]',error.message);
+    res.status(500).json({error:'Impossible de modifier le compte secrétaire.'});
+  }
+});
 app.get('/api/secretary/programs',auth,role('secretary'),(req,res)=>res.json(db.prepare('SELECT id,name,duration,price_htg,monthly_fee_htg FROM programs WHERE active=1 ORDER BY name').all()));
 app.get('/api/secretary/students',auth,role('secretary'),(req,res)=>{const q=String(req.query.q||'').trim();const like='%'+q+'%';res.json(db.prepare(`SELECT id,student_no,name,phone FROM students WHERE (?='' OR name LIKE ? OR student_no LIKE ? OR nif LIKE ? OR cin LIKE ?) ORDER BY id DESC LIMIT 100`).all(q,like,like,like,like));});
 app.post('/api/secretary/students',auth,role('secretary'),(req,res)=>{try{const b=req.body||{},nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(!b.name||!b.phone||!b.program_id)return res.status(400).json({error:'Nom, téléphone et formation obligatoires.'});if(!nif&&!cin)return res.status(400).json({error:'NIF ou CIN obligatoire.'});if(nif&&db.prepare('SELECT id FROM students WHERE nif=?').get(nif))return res.status(409).json({error:'Ce NIF existe déjà. Contactez l’administrateur pour une correction.'});if(cin&&db.prepare('SELECT id FROM students WHERE cin=?').get(cin))return res.status(409).json({error:'Ce CIN existe déjà. Contactez l’administrateur pour une correction.'});const program=db.prepare('SELECT id FROM programs WHERE id=? AND active=1').get(Number(b.program_id));if(!program)return res.status(400).json({error:'Formation invalide.'});const no=nextNo('CETEP','students','student_no');const pw=generateTemporaryPassword();const tx=db.transaction(()=>{const r=db.prepare(`INSERT INTO students(student_no,name,birth_date,birth_place,phone,email,nif,cin,program_id,education,blood_group,responsible_person,marital_status,status,password_hash,access_enabled,created_by,created_by_email) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`).run(no,String(b.name).trim(),b.birth_date||null,b.birth_place||null,String(b.phone).trim(),b.email||null,nif||null,cin||null,Number(b.program_id),b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,'En attente',bcrypt.hashSync(pw,12),req.user.id,req.user.email);db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,'En attente',0,0,?,?)").run(r.lastInsertRowid,Number(b.program_id),b.start_date||null,b.end_date||null);db.prepare("INSERT INTO secretariat_audit(actor_id,actor_email,action,entity_type,entity_id,details) VALUES(?,?,'CREATE_STUDENT','student',?,?)").run(req.user.id,req.user.email,r.lastInsertRowid,JSON.stringify({student_no:no,program_id:Number(b.program_id)}));return Number(r.lastInsertRowid);});const id=tx();res.status(201).json({ok:true,id,student_no:no,temporary_password:pw});}catch(e){res.status(400).json({error:e.message});}});
