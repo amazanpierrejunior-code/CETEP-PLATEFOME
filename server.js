@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.0.0-modele-approuve-dynamique';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-0.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.1.0-verification-certificats-admin';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-0.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS certificates(
   FOREIGN KEY(result_id) REFERENCES final_results(id) ON DELETE SET NULL,
   UNIQUE(student_id,program_id)
 );
+CREATE TABLE IF NOT EXISTS certificate_admin_audit( id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL, program_id INTEGER NOT NULL, certificate_id INTEGER, actor_id INTEGER, actor_email TEXT, action TEXT NOT NULL, reason TEXT, conditions_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP );
 CREATE TABLE IF NOT EXISTS attendance(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   student_id INTEGER NOT NULL,
@@ -591,7 +592,7 @@ app.get('/api/admin/donations',auth,role('admin'),(req,res)=>res.json(db.prepare
 app.get('/api/admin/gallery',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM gallery ORDER BY sort_order,id DESC').all()));app.post('/api/admin/gallery',auth,role('admin'),(req,res)=>{const b=req.body;if(!b.title||!b.image_url)return res.status(400).json({error:'Titre et photo obligatoires'});if(String(b.image_url).length>7000000)return res.status(400).json({error:'Photo trop grande. Maximum recommandé: 5 Mo.'});const r=db.prepare('INSERT INTO gallery(title,description,image_url,sort_order,active) VALUES(?,?,?,?,?)').run(b.title,b.description||'',b.image_url,Number(b.sort_order||99),b.active===false?0:1);res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE gallery SET title=?,description=?,image_url=?,sort_order=?,active=? WHERE id=?').run(b.title,b.description||'',b.image_url,b.sort_order||99,b.active===false?0:1,req.params.id);res.json({ok:true});});app.delete('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM gallery WHERE id=?').run(req.params.id);res.json({ok:true});});
 // CETEP Local ↔ Online snapshot: keeps a complete administrative copy on the local device.
 app.get('/api/admin/local-snapshot',auth,role('admin'),(req,res)=>{
-  const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery'];
+  const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','certificate_admin_audit','attendance','announcements','gallery'];
   const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};
   for(const t of tables) out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();
   res.json(out);
@@ -646,7 +647,7 @@ app.post('/api/admin/local-sync',auth,role('admin'),(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','secretariat_audit','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v14.7.1.json"');res.send(JSON.stringify(out,null,2));});
+app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','secretariat_audit','certificate_admin_audit','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v15.1.0.json"');res.send(JSON.stringify(out,null,2));});
 app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();db.prepare("UPDATE payments SET program_id=(SELECT program_id FROM students WHERE students.id=payments.student_id) WHERE program_id IS NULL").run();db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id,CASE WHEN status='Actif' THEN 'Actif' ELSE COALESCE(status,'En attente') END,CASE WHEN access_enabled=1 THEN 1 ELSE 0 END FROM students WHERE program_id IS NOT NULL").run();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
 
 // Certificates & academic results
@@ -690,7 +691,44 @@ app.post('/api/admin/results',auth,role('admin'),(req,res)=>{
   const cert=tryAutoIssueCertificate(studentId,programId);
   res.json({ok:true,status,certificate:cert});
 });
-app.post('/api/admin/certificates/:studentId/issue',auth,role('admin'),(req,res)=>{const sid=Number(req.params.studentId),s=db.prepare('SELECT id,program_id FROM students WHERE id=?').get(sid);if(!s)return res.status(404).json({error:'Étudiant introuvable'});const pid=Number(req.body.program_id||s.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(400).json({error:'Choisissez une formation inscrite au dossier étudiant.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(409).json({error:'Le certificat n’est pas encore éligible: réussite, 100% des leçons et frais confirmés sont requis.'});res.json({ok:true,certificate:cert});});
+app.get('/api/admin/certificates/review/:studentId/:programId',auth,role('admin'),(req,res)=>{
+  const sid=Number(req.params.studentId),pid=Number(req.params.programId);
+  const student=db.prepare('SELECT id,student_no,name,email,phone FROM students WHERE id=?').get(sid);
+  const enrollment=db.prepare('SELECT id,start_date,end_date,status FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid);
+  const program=db.prepare('SELECT id,name,price_htg FROM programs WHERE id=?').get(pid);
+  if(!student||!enrollment||!program)return res.status(404).json({error:'Dossier étudiant ou formation introuvable.'});
+  const result=db.prepare('SELECT score,pass_mark,status,notes,evaluated_at FROM final_results WHERE student_id=? AND program_id=?').get(sid,pid)||null;
+  const completion=completionStats(sid,pid),payment=paymentStats(sid,pid);
+  const certificate=db.prepare('SELECT id,certificate_no,issued_at,status FROM certificates WHERE student_id=? AND program_id=?').get(sid,pid)||null;
+  const conditions={passed:!!result&&result.status==='Réussi'&&Number(result.score)>=Number(result.pass_mark),lessons_complete:completion.percent>=100,payment_complete:payment.fullyPaid};
+  res.json({student,enrollment,program,result,completion,payment,conditions,eligible:Object.values(conditions).every(Boolean),certificate});
+});
+app.post('/api/admin/certificates/review/:studentId/:programId/decision',auth,role('admin'),(req,res)=>{
+  const sid=Number(req.params.studentId),pid=Number(req.params.programId),decision=String(req.body.decision||'').toLowerCase(),reason=String(req.body.reason||'').trim();
+  if(!['approve','reject'].includes(decision))return res.status(400).json({error:'Choisissez une décision valide.'});
+  const student=db.prepare('SELECT id FROM students WHERE id=?').get(sid);
+  if(!student||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({error:'Dossier étudiant ou formation introuvable.'});
+  const result=db.prepare('SELECT * FROM final_results WHERE student_id=? AND program_id=?').get(sid,pid)||null;
+  const completion=completionStats(sid,pid),payment=paymentStats(sid,pid);
+  const conditions={passed:!!result&&result.status==='Réussi'&&Number(result.score)>=Number(result.pass_mark),lessons_complete:completion.percent>=100,payment_complete:payment.fullyPaid};
+  const eligible=Object.values(conditions).every(Boolean);
+  if(decision==='approve'&&!eligible&&!reason)return res.status(400).json({error:'Une justification est obligatoire pour délivrer un certificat par dérogation.'});
+  if(decision==='reject'){
+    db.prepare("INSERT INTO certificate_admin_audit(student_id,program_id,actor_id,actor_email,action,reason,conditions_json) VALUES(?,?,?,?,?,?,?)").run(sid,pid,req.user.id,req.user.email,'REJECTED',reason||'Certificat non délivré après vérification.',JSON.stringify({conditions,completion,payment,result}));
+    return res.json({ok:true,decision:'rejected',message:'Décision enregistrée. Aucun certificat n’a été délivré.'});
+  }
+  const existing=db.prepare('SELECT * FROM certificates WHERE student_id=? AND program_id=?').get(sid,pid);
+  if(existing)return res.status(409).json({error:'Un certificat existe déjà pour cette formation.',certificate:existing});
+  const tx=db.transaction(()=>{
+    const certNo=certificateNo();
+    const inserted=db.prepare("INSERT INTO certificates(certificate_no,student_id,program_id,result_id,status) VALUES(?,?,?,?, 'Valide')").run(certNo,sid,pid,result?.id||null);
+    const cert=db.prepare('SELECT c.*,s.name student_name,p.name program_name,r.score,r.pass_mark FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id LEFT JOIN final_results r ON r.id=c.result_id WHERE c.id=?').get(inserted.lastInsertRowid);
+    db.prepare("INSERT INTO certificate_admin_audit(student_id,program_id,certificate_id,actor_id,actor_email,action,reason,conditions_json) VALUES(?,?,?,?,?,?,?,?)").run(sid,pid,cert.id,req.user.id,req.user.email,eligible?'ADMIN_APPROVED':'ADMIN_OVERRIDE',reason||null,JSON.stringify({conditions,completion,payment,result}));
+    return cert;
+  });
+  try{return res.status(201).json({ok:true,decision:'approved',certificate:tx(),override:!eligible});}catch(e){return res.status(409).json({error:e.message||'Impossible de délivrer le certificat.'});}
+});
+app.post('/api/admin/certificates/:studentId/issue',auth,role('admin'),(req,res)=>res.status(410).json({error:'Utilisez le bouton Vérifier / délivrer pour examiner le dossier et confirmer votre décision.'}));
 app.get('/api/admin/certificates/:id/pdf',auth,role('admin'),(req,res)=>sendCertificatePdf(req,res,Number(req.params.id),true));
 app.get('/api/student/certificate',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({eligible:false,message:'Cette formation ne figure pas dans votre dossier.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).json({eligible:false,message:'Votre certificat sera disponible après réussite, 100% des leçons et paiement complet des frais.'});res.json({eligible:true,certificate:cert,download:'/api/student/certificate.pdf?program_id='+pid});});
 app.get('/api/student/certificate.pdf',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).send('Formation non autorisée');const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).send('Certificat non disponible');sendCertificatePdf(req,res,cert.id,false);});
