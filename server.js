@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='14.9.2-certificat-complet-valeurs-corrigees';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v14-9-0.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.0.0-modele-approuve-dynamique';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-0.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -798,13 +798,9 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   doc.fillColor('#101b45').font('Times-Bold').fontSize(nameSize)
     .text(name,270,307,{width:304,height:32,align:'center',lineBreak:false,ellipsis:true});
 
-  // Phrase d'introduction: le fond contient encore une version pâle de cette ligne.
-  // On la neutralise discrètement puis on la réimprime une seule fois en bleu CETEP.
-  doc.save();
-  doc.fillOpacity(1).fillColor('#ffffff').rect(300,350,244,22).fill();
-  doc.restore();
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(11.6)
-    .text('a suivi avec succès la formation en',300,351,{width:244,height:16,align:'center',lineBreak:false});
+  // La phrase « a suivi avec succès la formation en » est déjà présente
+  // dans le modèle approuvé d'origine. Ne pas la redessiner ici : cela
+  // provoquerait un doublon. Seuls le nom et le nom de la formation varient.
 
   doc.fillColor('#101b45').font('Times-Bold').fontSize(programSize)
     .text(formation,294,374,{width:260,height:27,align:'center',lineBreak:false,ellipsis:true});
@@ -838,7 +834,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   const weeklyHours=String(c.certificate_weekly_hours||'4 heures par semaine').trim();
   const duration=String(c.duration||'Durée à préciser').trim();
   const periodValue=(start&&finish)?`${fmt(start)} – ${fmt(finish)}`:(start?`${fmt(start)} – fin à confirmer`:'Dates à confirmer');
-  const metricY=482;
+  const metricY=474;
   doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
     .text(weeklyHours,178,metricY,{width:150,height:17,align:'center',lineBreak:false,ellipsis:true});
   doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
@@ -846,7 +842,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   doc.fillColor('#101b45').font('Times-Bold').fontSize(8.8)
     .text(periodValue,490,metricY,{width:245,height:17,align:'center',lineBreak:false,ellipsis:true});
   doc.fillColor('#101b45').font('Times-Roman').fontSize(10.4)
-    .text(`Fait à ${city}, le ${issued}`,315,500,{width:230,height:17,align:'center',lineBreak:false,ellipsis:true});
+    .text(`Fait à ${city}, le ${issued}`,315,492,{width:230,height:17,align:'center',lineBreak:false,ellipsis:true});
 
   // QR code individuel: il remplace le QR statique retiré du fond.
   const base=(process.env.PUBLIC_BASE_URL||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');
