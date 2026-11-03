@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();const APP_VERSION='14.8.0-certificat-single-overlay-verified';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v14-8-0.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='14.9.2-certificat-complet-valeurs-corrigees';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v14-9-0.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -714,7 +714,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
     p.name program_name,p.duration,e.enrolled_at,e.start_date,e.end_date,r.score,r.pass_mark,
     cpt.intro certificate_program_intro,cpt.extra_text certificate_program_extra_text,
     st.school_name,st.school_full_name,st.slogan,st.logo_url,st.certificate_city,
-    st.certificate_extra_text,st.certificate_other_size,st.certificate_name_size,st.certificate_program_size
+    st.certificate_extra_text,st.certificate_other_size,st.certificate_name_size,st.certificate_program_size,st.certificate_weekly_hours
     FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id
     LEFT JOIN final_results r ON r.id=c.result_id
     LEFT JOIN enrollments e ON e.student_id=c.student_id AND e.program_id=c.program_id
@@ -726,7 +726,8 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
       MAX(CASE WHEN key='certificate_extra_text' THEN value END) certificate_extra_text,
       MAX(CASE WHEN key='certificate_other_size' THEN value END) certificate_other_size,
       MAX(CASE WHEN key='certificate_name_size' THEN value END) certificate_name_size,
-      MAX(CASE WHEN key='certificate_program_size' THEN value END) certificate_program_size FROM settings) st
+      MAX(CASE WHEN key='certificate_program_size' THEN value END) certificate_program_size,
+      MAX(CASE WHEN key='certificate_weekly_hours' THEN value END) certificate_weekly_hours FROM settings) st
     WHERE c.id=?`).get(certificateId);
   if(!c)return res.status(404).send('Certificat introuvable');
   if(!isAdmin && c.student_id!==req.user.id)return res.status(403).send('Accès interdit');
@@ -775,57 +776,79 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   const fmt=value=>{if(!value)return 'Non renseignée';const raw=String(value).slice(0,10);const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);if(m)return `${m[3]}/${m[2]}/${m[1]}`;const d=new Date(value);return Number.isNaN(d.getTime())?'Non renseignée':d.toLocaleDateString('fr-FR');};
   const parse=value=>{if(!value)return null;const raw=String(value).slice(0,10);const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);if(m)return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));const d=new Date(value);return Number.isNaN(d.getTime())?null:d;};
   const start=parse(c.start_date||c.enrolled_at);let finish=parse(c.end_date);
-  if(!finish&&start){const dm=String(c.duration||'').match(/(\d+)\s*(?:mois|month|months)/i);if(dm){finish=new Date(start);finish.setMonth(finish.getMonth()+Number(dm[1]));}}
+  if(!finish&&start){
+    const durationText=String(c.duration||'').toLowerCase();
+    const amount=durationText.match(/(\d+)/);
+    if(amount){
+      const n=Number(amount[1]);finish=new Date(start);
+      if(/an|année|annee|year/.test(durationText))finish.setFullYear(finish.getFullYear()+n);
+      else if(/semaine|week/.test(durationText))finish.setDate(finish.getDate()+7*n);
+      else if(/jour|day/.test(durationText))finish.setDate(finish.getDate()+n);
+      else if(/mois|month/.test(durationText))finish.setMonth(finish.getMonth()+n);
+      else finish=null;
+    }
+  }
   const issued=fmt(c.issued_at);
   const city=String(c.certificate_city||'Carrefour');
 
-  // Chaque donnée variable est imprimée une seule fois sur le fond vierge.
-  // Le bloc descriptif est limité à sa zone pour qu'un texte personnalisé long
-  // ne puisse jamais empiéter sur les informations de durée et de période.
-  const nameSize=safeSize(c.certificate_name_size,22,14,25);
-  const programSize=safeSize(c.certificate_program_size,21,14,23);
+  // Le fond 14.9.0 reprend le modèle approuvé; les champs variables ont été nettoyés.
+  // Chaque champ ci-dessous est donc imprimé une seule fois.
+  const nameSize=safeSize(c.certificate_name_size,24,14,25);
+  const programSize=safeSize(c.certificate_program_size,22,14,23);
   doc.fillColor('#101b45').font('Times-Bold').fontSize(nameSize)
-    .text(name,205,310,{width:432,height:34,align:'center',lineBreak:false,ellipsis:true});
+    .text(name,270,307,{width:304,height:32,align:'center',lineBreak:false,ellipsis:true});
+
+  // Phrase d'introduction: le fond contient encore une version pâle de cette ligne.
+  // On la neutralise discrètement puis on la réimprime une seule fois en bleu CETEP.
+  doc.save();
+  doc.fillOpacity(1).fillColor('#ffffff').rect(300,350,244,22).fill();
+  doc.restore();
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(11.6)
+    .text('a suivi avec succès la formation en',300,351,{width:244,height:16,align:'center',lineBreak:false});
 
   doc.fillColor('#101b45').font('Times-Bold').fontSize(programSize)
-    .text(formation,220,373,{width:402,height:32,align:'center',lineBreak:false,ellipsis:true});
+    .text(formation,294,374,{width:260,height:27,align:'center',lineBreak:false,ellipsis:true});
 
-  const paragraphX=178, paragraphY=405, paragraphW=486, paragraphMaxH=48;
+  const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=45;
   const description=[intro,extra].filter(Boolean).join('\n');
-  let descriptionFont=safeSize(c.certificate_other_size,10.5,8,12);
+  let descriptionFont=safeSize(c.certificate_other_size,10.2,8,11.5);
   doc.font('Times-Roman').fontSize(descriptionFont);
-  let descriptionHeight=doc.heightOfString(description,{width:paragraphW,align:'center',lineGap:0.8});
+  let descriptionHeight=doc.heightOfString(description,{width:paragraphW,align:'center',lineGap:0.6});
   while(descriptionHeight>paragraphMaxH && descriptionFont>8){
     descriptionFont=Math.max(8,descriptionFont-0.25);
     doc.font('Times-Roman').fontSize(descriptionFont);
-    descriptionHeight=doc.heightOfString(description,{width:paragraphW,align:'center',lineGap:0.8});
+    descriptionHeight=doc.heightOfString(description,{width:paragraphW,align:'center',lineGap:0.6});
   }
   let descriptionToDraw=description;
   if(descriptionHeight>paragraphMaxH){
-    // Troncature mesurée à la limite du cadre, plutôt que de laisser déborder le PDF.
     let lo=0,hi=description.length;
     while(lo<hi){
       const mid=Math.ceil((lo+hi)/2);
       const candidate=description.slice(0,mid).trimEnd()+'…';
-      if(doc.heightOfString(candidate,{width:paragraphW,align:'center',lineGap:0.8})<=paragraphMaxH)lo=mid;else hi=mid-1;
+      if(doc.heightOfString(candidate,{width:paragraphW,align:'center',lineGap:0.6})<=paragraphMaxH)lo=mid;else hi=mid-1;
     }
     descriptionToDraw=description.slice(0,Math.max(1,lo)).trimEnd()+'…';
   }
   doc.fillColor('#101b45').font('Times-Roman').fontSize(descriptionFont)
-    .text(descriptionToDraw,paragraphX,paragraphY,{width:paragraphW,height:paragraphMaxH,align:'center',lineGap:0.8,ellipsis:true});
+    .text(descriptionToDraw,paragraphX,paragraphY,{width:paragraphW,height:paragraphMaxH,align:'center',lineGap:0.6,ellipsis:true});
 
-  // Les valeurs variables sont alignées sur les libellés déjà imprimés dans le modèle.
-  // Le libellé « Durée de la formation » et « Période de formation » restent dans le fond.
-  const duration=String(c.duration||'').trim()||'Selon le programme';
-  const periodValue=`du ${fmt(start)} au ${fmt(finish)}`;
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(10.5)
-    .text(duration,355,471,{width:125,height:16,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(10.2)
-    .text(periodValue,515,471,{width:215,height:16,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(11)
-    .text(`Fait à ${city}, le ${issued}`,230,490,{width:382,height:18,align:'center',lineBreak:false,ellipsis:true});
+  // Les libellés sont déjà imprimés sur le modèle; seules les valeurs sont ajoutées ici.
+  // Valeurs des trois indicateurs : les libellés sont déjà imprimés dans le fond.
+  // Les valeurs sont placées sur une ligne distincte SOUS les libellés (et non dessus).
+  const weeklyHours=String(c.certificate_weekly_hours||'4 heures par semaine').trim();
+  const duration=String(c.duration||'Durée à préciser').trim();
+  const periodValue=(start&&finish)?`${fmt(start)} – ${fmt(finish)}`:(start?`${fmt(start)} – fin à confirmer`:'Dates à confirmer');
+  const metricY=482;
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
+    .text(weeklyHours,178,metricY,{width:150,height:17,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
+    .text(duration,338,metricY,{width:130,height:17,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(8.8)
+    .text(periodValue,490,metricY,{width:245,height:17,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(10.4)
+    .text(`Fait à ${city}, le ${issued}`,315,500,{width:230,height:17,align:'center',lineBreak:false,ellipsis:true});
 
-  // QR code individuel placé dans le cartouche supérieur droit du modèle approuvé.
+  // QR code individuel: il remplace le QR statique retiré du fond.
   const base=(process.env.PUBLIC_BASE_URL||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');
   const verifyUrl=`${base}/certificat/${encodeURIComponent(c.certificate_no)}`;
   const qr=await QRCode.toBuffer(verifyUrl,{type:'png',errorCorrectionLevel:'H',margin:1,width:240,color:{dark:'#000000',light:'#ffffff'}});
