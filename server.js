@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.2.0-modele-certificat-corrige';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.2.1-neon-audit-migration';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -949,14 +949,22 @@ async function restoreNeonSnapshot(snapshot){
     'academic_subjects',
     'academic_grades',
     'secretariat_audit',
-    'certificate_program_texts'
+    'certificate_program_texts',
+    'certificate_admin_audit'
   ];
 
   for (const name of backwardCompatibleTables) {
     if (known.has(name) && !Array.isArray(snapshot.tables[name])) {
-      snapshot.tables[name] = [];
+      // Keep any rows already present in the local database. This matters for
+      // the certificate audit log: older Neon snapshots predate this table.
+      // The new table is initialized from local rows (usually empty on first
+      // migration), then included in the next atomic Neon snapshot.
+      const safe = name.replace(/\"/g, '\"\"');
+      snapshot.tables[name] = name === 'certificate_admin_audit'
+        ? db.prepare(`SELECT * FROM "${safe}"`).all()
+        : [];
       console.log(
-        `[CETEP] Migration automatique : table ${name} absente du snapshot, initialisée vide.`
+        `[CETEP] Migration automatique : table ${name} absente du snapshot, ${snapshot.tables[name].length} ligne(s) locale(s) conservée(s).`
       );
     }
   }
