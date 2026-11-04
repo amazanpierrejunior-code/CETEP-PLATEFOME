@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.2.0-modele-certificat-corrige';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.2.1-neon-audit-migration-safe';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -843,8 +843,10 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 
   // Le fond v15.2 reprend le modèle CETEP vierge approuvé; les champs variables sont imprimés une seule fois.
   // Chaque champ ci-dessous est donc imprimé une seule fois.
-  const nameSize=safeSize(c.certificate_name_size,24,14,25);
-  const programSize=safeSize(c.certificate_program_size,22,14,23);
+  // Tailles approuvées par le CETEP : nom et formation à 15 pt.
+  // Les réglages historiques en base ne doivent plus rétablir les anciennes tailles.
+  const nameSize=15;
+  const programSize=15;
   doc.fillColor('#101b45').font('Times-Bold').fontSize(nameSize)
     .text(name,270,307,{width:304,height:32,align:'center',lineBreak:false,ellipsis:true});
 
@@ -857,7 +859,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 
   const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=45;
   const description=[intro,extra].filter(Boolean).join('\n');
-  let descriptionFont=safeSize(c.certificate_other_size,10.2,8,11.5);
+  let descriptionFont=12;
   doc.font('Times-Roman').fontSize(descriptionFont);
   let descriptionHeight=doc.heightOfString(description,{width:paragraphW,align:'center',lineGap:0.6});
   while(descriptionHeight>paragraphMaxH && descriptionFont>8){
@@ -885,13 +887,13 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   const duration=String(c.duration||'Durée à préciser').trim();
   const periodValue=(start&&finish)?`${fmt(start)} – ${fmt(finish)}`:(start?`${fmt(start)} – fin à confirmer`:'Dates à confirmer');
   const metricY=474;
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(12)
     .text(weeklyHours,178,metricY,{width:150,height:17,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(12)
     .text(duration,338,metricY,{width:130,height:17,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(8.8)
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(12)
     .text(periodValue,490,metricY,{width:245,height:17,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(10.4)
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(12)
     .text(`Fait à ${city}, le ${issued}`,315,492,{width:230,height:17,align:'center',lineBreak:false,ellipsis:true});
 
   // QR code individuel: il remplace le QR statique retiré du fond.
@@ -955,9 +957,9 @@ async function restoreNeonSnapshot(snapshot){
 
   for (const name of backwardCompatibleTables) {
     if (known.has(name) && !Array.isArray(snapshot.tables[name])) {
-      // Preserve rows already present in the local SQLite database. Do not
-      // initialize audit/history tables as empty: that would erase local history
-      // when the snapshot is restored below.
+      // Keep rows already present in the local SQLite database. Do not replace
+      // a missing table with []: the restore transaction deletes and recreates
+      // every table listed in the snapshot.
       const safe = name.replace(/"/g, '""');
       snapshot.tables[name] = db.prepare(`SELECT * FROM "${safe}"`).all();
       console.log(
