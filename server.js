@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.2.1-neon-audit-migration-safe';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.3.0-autorisations-documents';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS certificates(
   UNIQUE(student_id,program_id)
 );
 CREATE TABLE IF NOT EXISTS certificate_admin_audit( id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL, program_id INTEGER NOT NULL, certificate_id INTEGER, actor_id INTEGER, actor_email TEXT, action TEXT NOT NULL, reason TEXT, conditions_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP );
+CREATE TABLE IF NOT EXISTS student_document_permissions(id INTEGER PRIMARY KEY AUTOINCREMENT,student_id INTEGER NOT NULL,program_id INTEGER NOT NULL,document_type TEXT NOT NULL CHECK(document_type IN ('certificate','transcript','attestation')),authorized INTEGER NOT NULL DEFAULT 0,updated_by INTEGER,updated_by_email TEXT,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(student_id,program_id,document_type),FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS student_document_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,student_id INTEGER NOT NULL,program_id INTEGER NOT NULL,document_type TEXT NOT NULL,authorized INTEGER NOT NULL,actor_id INTEGER,actor_email TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS attendance(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   student_id INTEGER NOT NULL,
@@ -175,7 +177,7 @@ db.prepare('UPDATE payments SET program_id=(SELECT program_id FROM students WHER
 db.prepare("UPDATE enrollments SET access_enabled=1 WHERE status='Actif' AND access_enabled=0").run();
 // CETEP passing threshold: 70/100. Upgrade legacy results that still carry the old 60/100 default.
 db.prepare("UPDATE final_results SET pass_mark=70, status=CASE WHEN score>=70 THEN 'Réussi' ELSE 'Échoué' END WHERE pass_mark=60").run();
-const defaults={school_name:'CETEP',school_full_name:"Centre d'Encadrement Technique et Professionnel",slogan:'Formation • Orientation • Insertion professionnelle',address:'Lamentin 54, Ruelle Crispin #856',phone:'+509 3601 8696 / +509 3736 5610 / +1 561-674-2890',email:'cetepecoleprofessionnelle@gmail.com',primary_color:'#0d2b52',secondary_color:'#1677b8',accent_color:'#087443',logo_text:'CETEP',logo_url:'',typography_font_family:'Arial,Helvetica,sans-serif',typography_font_size:'16px',typography_bold:'0',typography_italic:'0',typography_line_height:'1.5',certificate_intro:'Dans le cadre du renforcement des compétences techniques et professionnelles au Centre d’Encadrement Technique et Professionnel (CETEP).',certificate_city:'Carrefour',certificate_dg_name:'Agronome Livenson Fleuriot',certificate_dg_title:'Directeur Général',certificate_studies_name:'Wilio Joseph',certificate_studies_title:'Directeur des Études',certificate_extra_text:'',certificate_name_size:'20',certificate_program_size:'20',certificate_other_size:'16'};
+const defaults={school_name:'CETEP',school_full_name:"Centre d'Encadrement Technique et Professionnel",slogan:'Formation • Orientation • Insertion professionnelle',address:'Lamentin 54, Ruelle Crispin #856',phone:'+509 3601 8696 / +509 3736 5610 / +1 561-674-2890',email:'cetepecoleprofessionnelle@gmail.com',primary_color:'#0d2b52',secondary_color:'#1677b8',accent_color:'#087443',logo_text:'CETEP',logo_url:'',typography_font_family:'Arial,Helvetica,sans-serif',typography_font_size:'16px',typography_bold:'0',typography_italic:'0',typography_line_height:'1.5',certificate_intro:'Dans le cadre du renforcement des compétences techniques et professionnelles au Centre d’Encadrement Technique et Professionnel (CETEP).',certificate_city:'Carrefour',certificate_dg_name:'Agronome Livenson Fleuriot',certificate_dg_title:'Directeur Général',certificate_studies_name:'Wilio Joseph',certificate_studies_title:'Directeur des Études',certificate_extra_text:'',certificate_name_size:'15',certificate_program_size:'15',certificate_other_size:'12'};
 const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');for(const [k,v] of Object.entries(defaults))set.run(k,v);
 db.exec(`CREATE TABLE IF NOT EXISTS certificate_program_texts(program_id INTEGER PRIMARY KEY, intro TEXT NOT NULL DEFAULT '', extra_text TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
 
@@ -567,6 +569,32 @@ app.put('/api/admin/certificate-program-texts/:id',auth,role('admin'),(req,res)=
  res.json({ok:true,message:'Texte du certificat enregistré pour cette formation.'});
 });
 app.get('/api/admin/settings',auth,role('admin'),(req,res)=>res.json(settings()));app.put('/api/admin/settings',auth,role('admin'),(req,res)=>{const q=db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');for(const k of Object.keys(defaults))if(req.body[k]!==undefined)q.run(k,String(req.body[k]));res.json({ok:true,settings:settings()});});app.post('/api/admin/logo/reset',auth,role('admin'),(req,res)=>{db.prepare("UPDATE settings SET value='' WHERE key='logo_url'").run();res.json({ok:true});});
+// Document permissions: only an administrator can authorize or revoke student downloads.
+const DOCUMENT_TYPES=['certificate','transcript','attestation'];
+function documentPermission(studentId,programId,type){
+  return db.prepare('SELECT authorized FROM student_document_permissions WHERE student_id=? AND program_id=? AND document_type=?').get(studentId,programId,type)?.authorized===1;
+}
+app.get('/api/admin/students/:id/document-permissions',auth,role('admin'),(req,res)=>{
+ const sid=Number(req.params.id);
+ const student=db.prepare('SELECT id,student_no,name FROM students WHERE id=?').get(sid);
+ if(!student)return res.status(404).json({error:'Étudiant introuvable'});
+ const rows=db.prepare(`SELECT e.program_id,p.name program_name,e.status,
+   COALESCE(MAX(CASE WHEN d.document_type='certificate' THEN d.authorized END),0) certificate,
+   COALESCE(MAX(CASE WHEN d.document_type='transcript' THEN d.authorized END),0) transcript,
+   COALESCE(MAX(CASE WHEN d.document_type='attestation' THEN d.authorized END),0) attestation
+   FROM enrollments e JOIN programs p ON p.id=e.program_id LEFT JOIN student_document_permissions d ON d.student_id=e.student_id AND d.program_id=e.program_id
+   WHERE e.student_id=? GROUP BY e.program_id,p.name,e.status ORDER BY p.name`).all(sid);
+ res.json({student,permissions:rows});
+});
+app.post('/api/admin/students/:studentId/document-permissions/:programId/:type',auth,role('admin'),(req,res)=>{
+ const sid=Number(req.params.studentId),pid=Number(req.params.programId),type=String(req.params.type||''),authorized=req.body?.authorized===true;
+ if(!DOCUMENT_TYPES.includes(type))return res.status(400).json({error:'Type de document invalide.'});
+ if(!db.prepare('SELECT 1 FROM students WHERE id=?').get(sid)||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({error:'Étudiant ou formation introuvable.'});
+ db.prepare(`INSERT INTO student_document_permissions(student_id,program_id,document_type,authorized,updated_by,updated_by_email,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(student_id,program_id,document_type) DO UPDATE SET authorized=excluded.authorized,updated_by=excluded.updated_by,updated_by_email=excluded.updated_by_email,updated_at=CURRENT_TIMESTAMP`).run(sid,pid,type,authorized?1:0,req.user.id,req.user.email);
+ db.prepare('INSERT INTO student_document_audit(student_id,program_id,document_type,authorized,actor_id,actor_email) VALUES(?,?,?,?,?,?)').run(sid,pid,type,authorized?1:0,req.user.id,req.user.email);
+ res.json({ok:true,student_id:sid,program_id:pid,document_type:type,authorized});
+});
+
 app.get('/api/admin/students',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT s.*,p.name program_name,e.start_date,e.end_date FROM students s LEFT JOIN programs p ON p.id=s.program_id LEFT JOIN enrollments e ON e.student_id=s.id AND e.program_id=s.program_id ORDER BY s.id DESC').all()));
 app.post('/api/admin/students',auth,role('admin'),(req,res)=>{try{const b=req.body;const nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(!b.name||!b.phone||!b.program_id)return res.status(400).json({error:'Nom, téléphone et formation obligatoires'});if(!nif&&!cin)return res.status(400).json({error:'NIF ou CIN obligatoire pour identifier l’étudiant.'});if(nif&&db.prepare('SELECT id FROM students WHERE nif=? LIMIT 1').get(nif))return res.status(409).json({error:'Ce NIF existe déjà.'});if(cin&&db.prepare('SELECT id FROM students WHERE cin=? LIMIT 1').get(cin))return res.status(409).json({error:'Ce CIN existe déjà.'});const suppliedPassword=String(b.password||'');if(suppliedPassword&&!passwordIsStrong(suppliedPassword))return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});const temporaryPassword=suppliedPassword?'':generateTemporaryPassword();const pw=suppliedPassword||temporaryPassword;const no=String(b.student_no||'').trim().toUpperCase()||nextNo('CETEP','students','student_no');if(!/^[A-Z0-9][A-Z0-9._-]{2,39}$/.test(no))return res.status(400).json({error:'Code étudiant invalide : utilisez 3 à 40 caractères (lettres, chiffres, tiret, point ou underscore).'});if(db.prepare('SELECT 1 FROM students WHERE student_no=?').get(no))return res.status(409).json({error:'Ce code étudiant existe déjà.'});const r=db.prepare(`INSERT INTO students(student_no,name,birth_date,birth_place,phone,email,nif,cin,program_id,education,blood_group,responsible_person,marital_status,status,password_hash,access_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(no,b.name,b.birth_date||null,b.birth_place||null,b.phone,b.email||null,nif||null,cin||null,Number(b.program_id),b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.status||'Actif',bcrypt.hashSync(pw,12),b.access_enabled===false?0:1);db.prepare('INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,?,?,?,?,?)').run(r.lastInsertRowid,Number(b.program_id),b.access_enabled===false?'En attente':'Actif',b.access_enabled===false?0:1,b.access_enabled===false?0:1,b.start_date||null,b.end_date||null);res.status(201).json({ok:true,id:r.lastInsertRowid,student_no:no,...(temporaryPassword?{temporary_password:temporaryPassword}:{})});}catch(e){if(String(e.message).includes('UNIQUE constraint failed: students.nif'))return res.status(409).json({error:'Ce NIF existe déjà.'});if(String(e.message).includes('UNIQUE constraint failed: students.cin'))return res.status(409).json({error:'Ce CIN existe déjà.'});res.status(400).json({error:e.message});}});
 app.put('/api/admin/students/:id',auth,role('admin'),async (req,res)=>{try{const id=Number(req.params.id);const before=db.prepare('SELECT * FROM students WHERE id=?').get(id);if(!before)return res.status(404).json({error:'Étudiant introuvable'});const b=req.body||{};const code=String(b.student_no??before.student_no).trim().toUpperCase();if(!/^[A-Z0-9][A-Z0-9._-]{2,39}$/.test(code))return res.status(400).json({error:'Code étudiant invalide.'});if(db.prepare('SELECT 1 FROM students WHERE student_no=? AND id<>?').get(code,id))return res.status(409).json({error:'Ce code étudiant appartient déjà à un autre étudiant.'});const nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin);if(nif&&db.prepare('SELECT 1 FROM students WHERE nif=? AND id<>?').get(nif,id))return res.status(409).json({error:'Ce NIF est déjà enregistré.'});if(cin&&db.prepare('SELECT 1 FROM students WHERE cin=? AND id<>?').get(cin,id))return res.status(409).json({error:'Ce CIN est déjà enregistré.'});const tx=db.transaction(()=>{db.prepare(`UPDATE students SET student_no=?,name=?,birth_date=?,birth_place=?,phone=?,email=?,nif=?,cin=?,program_id=?,education=?,blood_group=?,responsible_person=?,marital_status=?,certificate_name=? WHERE id=?`).run(code,b.name??before.name,b.birth_date||null,b.birth_place||null,b.phone||null,b.email||null,nif||null,cin||null,Number(b.program_id||before.program_id)||null,b.education||null,b.blood_group||null,b.responsible_person||null,b.marital_status||null,b.certificate_name||null,id);const pid=Number(b.program_id||before.program_id||0);if(pid){db.prepare('INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled,manual_authorized,start_date,end_date) VALUES(?,?,?,?,?,?,?)').run(id,pid,b.status||before.status||'Actif',Number(before.access_enabled||0),1,b.start_date||null,b.end_date||null);db.prepare('UPDATE enrollments SET start_date=?,end_date=? WHERE student_id=? AND program_id=?').run(b.start_date||null,b.end_date||null,id,pid);db.prepare('UPDATE students SET program_id=? WHERE id=?').run(pid,id);}});tx();res.json({ok:true,message:'Dossier étudiant mis à jour.'});}catch(e){if(String(e.message).includes('students.nif'))return res.status(409).json({error:'Ce NIF est déjà enregistré.'});if(String(e.message).includes('students.cin'))return res.status(409).json({error:'Ce CIN est déjà enregistré.'});res.status(400).json({error:e.message});}});
@@ -742,8 +770,76 @@ app.post('/api/admin/certificates/review/:studentId/:programId/decision',auth,ro
 });
 app.post('/api/admin/certificates/:studentId/issue',auth,role('admin'),(req,res)=>res.status(410).json({error:'Utilisez le bouton Vérifier / délivrer pour examiner le dossier et confirmer votre décision.'}));
 app.get('/api/admin/certificates/:id/pdf',auth,role('admin'),(req,res)=>sendCertificatePdf(req,res,Number(req.params.id),true));
-app.get('/api/student/certificate',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({eligible:false,message:'Cette formation ne figure pas dans votre dossier.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).json({eligible:false,message:'Votre certificat sera disponible après réussite, 100% des leçons et paiement complet des frais.'});res.json({eligible:true,certificate:cert,download:'/api/student/certificate.pdf?program_id='+pid});});
-app.get('/api/student/certificate.pdf',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).send('Formation non autorisée');const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).send('Certificat non disponible');sendCertificatePdf(req,res,cert.id,false);});
+app.get('/api/student/me',auth,role('student'),(req,res)=>{
+ const sid=Number(req.user.id),student=db.prepare('SELECT id,student_no,name,email,phone FROM students WHERE id=?').get(sid);
+ if(!student)return res.status(404).json({error:'Dossier étudiant introuvable.'});
+ const enrollments=db.prepare(`SELECT e.*,p.name program_name,p.duration,p.price_htg,
+  COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé'),0) paid
+  FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at`).all(sid);
+ res.json({...student,enrollments});
+});
+app.get('/api/student/content',auth,role('student'),(req,res)=>{
+ const sid=Number(req.user.id),pid=Number(req.query.program_id);
+ if(!pid||!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(sid,pid))return res.status(403).json({error:'Accès non autorisé à cette formation.'});
+ const rows=db.prepare(`SELECT m.id module_id,m.title module_title,l.id lesson_id,l.title lesson_title,l.type,l.content,l.video_url,l.file_url,l.meeting_url,l.scheduled_at,l.duration_minutes,COALESCE(lp.completed,0) completed FROM modules m JOIN lessons l ON l.module_id=m.id LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.student_id=? WHERE m.program_id=? AND m.active=1 AND l.active=1 ORDER BY m.order_no,l.order_no`).all(sid,pid);
+ res.json(rows);
+});
+app.get('/api/student/documents',auth,role('student'),(req,res)=>{
+ const sid=Number(req.user.id),pid=Number(req.query.program_id);
+ if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).json({error:'Formation non autorisée.'});
+ const cert=db.prepare("SELECT id,certificate_no,issued_at,status FROM certificates WHERE student_id=? AND program_id=?").get(sid,pid)||null;
+ const grades=db.prepare('SELECT COUNT(*) c FROM academic_grades WHERE student_id=? AND program_id=?').get(sid,pid).c;
+ const perms=Object.fromEntries(DOCUMENT_TYPES.map(t=>[t,documentPermission(sid,pid,t)]));
+ res.json({permissions:perms,available:{certificate:!!cert,transcript:Number(grades)>0,attestation:passed},certificate:cert});
+});
+app.get('/api/student/documents/preview/:type',auth,role('student'),(req,res)=>{
+ const sid=Number(req.user.id),pid=Number(req.query.program_id),type=String(req.params.type||'');
+ if(!DOCUMENT_TYPES.includes(type)||!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({error:'Document introuvable.'});
+ const student=db.prepare('SELECT student_no,name FROM students WHERE id=?').get(sid),program=db.prepare('SELECT name,duration FROM programs WHERE id=?').get(pid);
+ const cert=db.prepare('SELECT certificate_no,issued_at,status FROM certificates WHERE student_id=? AND program_id=?').get(sid,pid)||null;
+ const gradeCount=db.prepare('SELECT COUNT(*) c FROM academic_grades WHERE student_id=? AND program_id=?').get(sid,pid).c;
+ const result=db.prepare("SELECT score,pass_mark,status,evaluated_at FROM final_results WHERE student_id=? AND program_id=?").get(sid,pid)||null;
+ if(type==='certificate'&&!cert)return res.status(404).json({error:'Certificat non délivré pour cette formation.'});
+ if(type==='transcript'&&!gradeCount)return res.status(404).json({error:'Aucune note enregistrée pour cette formation.'});
+ if(type==='attestation'&&(!result||result.status!=='Réussi'||Number(result.score)<Number(result.pass_mark)))return res.status(404).json({error:'L’attestation sera disponible après validation de la réussite académique.'});
+ const transcript=type==='transcript'?db.prepare("SELECT g.intra_score,g.final_score,g.weighted_score,sub.subject_name,sub.coefficient,t.term_name,t.academic_year FROM academic_grades g JOIN academic_subjects sub ON sub.id=g.subject_id JOIN academic_terms t ON t.id=g.term_id WHERE g.student_id=? AND g.program_id=? ORDER BY t.academic_year,t.term_no,sub.subject_name").all(sid,pid):[];
+ res.json({type,student,program,certificate:cert,result,grades:transcript,canDownload:documentPermission(sid,pid,type),message:documentPermission(sid,pid,type)?'Téléchargement autorisé par le CETEP.':'Document visible en consultation seulement. Le téléchargement attend l’autorisation de l’administration.'});
+});
+function requireDocumentPermission(req,res,type,pid){if(!documentPermission(Number(req.user.id),Number(pid),type)){res.status(403).json({error:'Téléchargement bloqué : l’administration du CETEP n’a pas encore autorisé ce document.'});return false;}return true;}
+
+app.get('/api/student/certificate',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(404).json({eligible:false,message:'Cette formation ne figure pas dans votre dossier.'});if(!documentPermission(sid,pid,'certificate'))return res.json({eligible:false,authorized:false,message:'Le certificat est en attente de l’autorisation de l’administration.'});const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).json({eligible:false,message:'Votre certificat sera disponible après réussite, 100% des leçons et paiement complet des frais.'});res.json({eligible:true,certificate:cert,download:'/api/student/certificate.pdf?program_id='+pid});});
+app.get('/api/student/certificate.pdf',auth,role('student'),(req,res)=>{const sid=Number(req.user.id),legacy=db.prepare('SELECT program_id FROM students WHERE id=?').get(sid);const pid=Number(req.query.program_id||legacy?.program_id||0);if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).send('Formation non autorisée');if(!documentPermission(sid,pid,'certificate'))return res.status(403).send('Téléchargement bloqué : autorisation administrative requise.');const cert=tryAutoIssueCertificate(sid,pid);if(!cert)return res.status(404).send('Certificat non disponible');sendCertificatePdf(req,res,cert.id,false);});
+app.get('/api/student/transcript.pdf',auth,role('student'),(req,res)=>{
+ try{
+  const sid=Number(req.user.id),pid=Number(req.query.program_id),year=String(req.query.year||'');
+  if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).send('Formation non autorisée.');
+  if(!documentPermission(sid,pid,'transcript'))return res.status(403).send('Téléchargement bloqué : autorisation administrative requise.');
+  const student=db.prepare('SELECT * FROM students WHERE id=?').get(sid),program=db.prepare('SELECT name FROM programs WHERE id=?').get(pid);
+  const terms=db.prepare("SELECT * FROM academic_terms WHERE program_id=? AND (?='' OR academic_year=?) ORDER BY academic_year,term_no").all(pid,year,year);
+  const grades=db.prepare("SELECT g.*,sub.subject_name,sub.coefficient,t.term_name,t.term_no,t.academic_year FROM academic_grades g JOIN academic_subjects sub ON sub.id=g.subject_id JOIN academic_terms t ON t.id=g.term_id WHERE g.student_id=? AND g.program_id=? AND (?='' OR t.academic_year=?) ORDER BY t.academic_year,t.term_no,sub.subject_name").all(sid,pid,year,year);
+  const doc=new PDFDocument({size:'A4',margin:42,info:{Title:'Relevé de notes CETEP',Author:'CETEP'}});
+  res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Disposition',`attachment; filename="releve-notes-${student.student_no}.pdf"`);doc.pipe(res);
+  doc.fillColor('#102b55').font('Helvetica-Bold').fontSize(17).text('CENTRE D’ENCADREMENT TECHNIQUE ET PROFESSIONNEL',{align:'center'});
+  doc.moveDown(.3).fillColor('#b8860b').fontSize(16).text('RELEVÉ DE NOTES',{align:'center'});doc.moveDown();
+  doc.fillColor('#17233f').font('Helvetica').fontSize(10).text(`Étudiant : ${student.name} (${student.student_no})`);doc.text(`Formation : ${program.name}`);doc.text(`Année académique : ${year||'Toutes les années'}`);doc.moveDown();
+  let weightedTotal=0,totalCoef=0;
+  for(const term of terms){if(doc.y>680)doc.addPage();doc.fillColor('#102b55').font('Helvetica-Bold').fontSize(12).text(`${term.term_name} — ${term.academic_year}`);doc.moveDown(.3);doc.fillColor('#222').font('Helvetica-Bold').fontSize(8.5).text('Matière                         Intra /100       Final /100       Moyenne /100');doc.moveDown(.2);const list=grades.filter(g=>g.term_id===term.id);let sum=0,coef=0;for(const g of list){const c=Number(g.coefficient||1);sum+=Number(g.weighted_score||0)*c;coef+=c;doc.font('Helvetica').fontSize(9).text(`${g.subject_name}     ${Number(g.intra_score).toFixed(2)}             ${Number(g.final_score).toFixed(2)}             ${Number(g.weighted_score).toFixed(2)}`);}weightedTotal+=sum;totalCoef+=coef;const avg=coef?sum/coef:null;doc.moveDown(.25).font('Helvetica-Bold').fontSize(9).text(`Moyenne : ${avg===null?'—':avg.toFixed(2)+' /100'}     Décision : ${avg===null?'En attente':avg>=70?'Réussi':'À reprendre'}`);doc.moveDown();}
+  const average=totalCoef?weightedTotal/totalCoef:null;if(doc.y>680)doc.addPage();doc.fillColor('#102b55').font('Helvetica-Bold').fontSize(12).text(`MOYENNE GÉNÉRALE : ${average===null?'—':average.toFixed(2)+' /100'}`);doc.text(`DÉCISION : ${average===null?'En attente':average>=70?'Réussi':'À reprendre'}`);doc.moveDown(2).fontSize(9).fillColor('#222').text('Directeur Général : Agronome Livenson Fleuriot');doc.text('Directeur des Études : Wilio Joseph');doc.end();
+ }catch(e){if(!res.headersSent)res.status(400).send(e.message);}
+});
+app.get('/api/student/attestation.pdf',auth,role('student'),(req,res)=>{
+ try{
+  const sid=Number(req.user.id),pid=Number(req.query.program_id);
+  if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).send('Formation non autorisée.');
+  if(!documentPermission(sid,pid,'attestation'))return res.status(403).send('Téléchargement bloqué : autorisation administrative requise.');
+  const st=db.prepare('SELECT * FROM students WHERE id=?').get(sid),p=db.prepare('SELECT name,duration FROM programs WHERE id=?').get(pid),e=db.prepare('SELECT * FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid);
+  const result=db.prepare("SELECT status,score,pass_mark FROM final_results WHERE student_id=? AND program_id=?").get(sid,pid);if(!result||result.status!=='Réussi'||Number(result.score)<Number(result.pass_mark))return res.status(403).send('Attestation non disponible : la réussite académique doit être validée.');
+  const doc=new PDFDocument({size:'A4',margin:54,info:{Title:'Attestation CETEP',Author:'CETEP'}});res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Disposition',`attachment; filename="attestation-${st.student_no}.pdf"`);doc.pipe(res);
+  doc.rect(24,24,547,794).lineWidth(3).strokeColor('#c99a22').stroke();doc.rect(32,32,531,778).lineWidth(1).strokeColor('#102b55').stroke();
+  doc.fillColor('#102b55').font('Helvetica-Bold').fontSize(18).text('CENTRE D’ENCADREMENT TECHNIQUE ET PROFESSIONNEL',{align:'center'});doc.moveDown(.3).fontSize(11).text('CETEP',{align:'center'});doc.moveDown(1.6).fillColor('#b8860b').fontSize(25).text('ATTESTATION',{align:'center'});doc.moveDown(1.5).fillColor('#17233f').font('Helvetica').fontSize(12).text('Je soussigné, Livenson Fleuriot, Directeur Général du Centre d’Encadrement Technique et Professionnel, référencé : Reg-XV ; Folio : 217 ; No K-430,');doc.moveDown(.8).font('Helvetica-Bold').text('Atteste que :');doc.moveDown(.6).font('Helvetica').text(`${st.name}, demeurant et domicilié(e) à Carrefour, enregistré(e) au numéro : ${st.student_no},`);doc.moveDown(.7).text(`a suivi une formation théorique et pratique en ${p.name}, pour une durée totale de ${p.duration||'six (6) mois'}, et a satisfait aux exigences académiques requises.`);doc.moveDown(1.2).text('En foi de quoi, le présent document lui est délivré pour servir et valoir ce que de droit.');doc.moveDown(2).text(`Fait à Carrefour, le ${new Date().toLocaleDateString('fr-FR')}`,{align:'center'});doc.moveDown(4);doc.font('Helvetica-Bold').fontSize(10).text('Livenson Fleuriot                                             Wilio Joseph',{align:'center'});doc.font('Helvetica').text('Directeur Général                                              Directeur des Études',{align:'center'});doc.moveDown(2).fontSize(8).text('2, Impasse Primitive, Lamentin 54, Carrefour, Haïti (W.I).',{align:'center'});doc.text('Tél. : (509) 3736-5610 / 4189-9854 / 3632-9281 / 3706-1376 / 3198-6496 / 3753-6926',{align:'center'});doc.end();
+ }catch(e){if(!res.headersSent)res.status(400).send(e.message);}
+});
+
 app.get('/api/certificates/verify/:number',(req,res)=>{
   const c=db.prepare(`SELECT c.certificate_no,c.issued_at,c.status,s.name student_name,p.name program_name,r.score
     FROM certificates c JOIN students s ON s.id=c.student_id JOIN programs p ON p.id=c.program_id
@@ -843,8 +939,8 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 
   // Le fond v15.2 reprend le modèle CETEP vierge approuvé; les champs variables sont imprimés une seule fois.
   // Chaque champ ci-dessous est donc imprimé une seule fois.
-  const nameSize=20;
-  const programSize=20;
+  const nameSize=safeSize(c.certificate_name_size,24,14,25);
+  const programSize=safeSize(c.certificate_program_size,22,14,23);
   doc.fillColor('#101b45').font('Times-Bold').fontSize(nameSize)
     .text(name,270,307,{width:304,height:32,align:'center',lineBreak:false,ellipsis:true});
 
@@ -857,7 +953,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 
   const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=45;
   const description=[intro,extra].filter(Boolean).join('\n');
-  let descriptionFont=16;
+  let descriptionFont=safeSize(c.certificate_other_size,10.2,8,11.5);
   doc.font('Times-Roman').fontSize(descriptionFont);
   let descriptionHeight=doc.heightOfString(description,{width:paragraphW,align:'center',lineGap:0.6});
   while(descriptionHeight>paragraphMaxH && descriptionFont>8){
@@ -885,14 +981,14 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   const duration=String(c.duration||'Durée à préciser').trim();
   const periodValue=(start&&finish)?`${fmt(start)} – ${fmt(finish)}`:(start?`${fmt(start)} – fin à confirmer`:'Dates à confirmer');
   const metricY=474;
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(16)
-    .text(weeklyHours,178,metricY,{width:150,height:21,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(16)
-    .text(duration,338,metricY,{width:130,height:21,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(16)
-    .text(periodValue,490,metricY,{width:245,height:21,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(16)
-    .text(`Fait à ${city}, le ${issued}`,315,492,{width:230,height:21,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
+    .text(weeklyHours,178,metricY,{width:150,height:17,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(9.8)
+    .text(duration,338,metricY,{width:130,height:17,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(8.8)
+    .text(periodValue,490,metricY,{width:245,height:17,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(10.4)
+    .text(`Fait à ${city}, le ${issued}`,315,492,{width:230,height:17,align:'center',lineBreak:false,ellipsis:true});
 
   // QR code individuel: il remplace le QR statique retiré du fond.
   const base=(process.env.PUBLIC_BASE_URL||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');
@@ -950,19 +1046,15 @@ async function restoreNeonSnapshot(snapshot){
     'academic_grades',
     'secretariat_audit',
     'certificate_program_texts',
-    'certificate_admin_audit'
+    'student_document_permissions',
+    'student_document_audit'
   ];
 
   for (const name of backwardCompatibleTables) {
     if (known.has(name) && !Array.isArray(snapshot.tables[name])) {
-      // Keep rows already present in the local SQLite database. Do not replace
-      // a missing table with []: the restore transaction deletes and recreates
-      // every table listed in the snapshot.
       const safe = name.replace(/"/g, '""');
       snapshot.tables[name] = db.prepare(`SELECT * FROM "${safe}"`).all();
-      console.log(
-        `[CETEP] Migration automatique : table ${name} absente du snapshot; ${snapshot.tables[name].length} ligne(s) locale(s) conservée(s).`
-      );
+      console.log(`[CETEP] Migration automatique : table ${name} absente du snapshot; ${snapshot.tables[name].length} ligne(s) locale(s) conservée(s).`);
     }
   }
 
