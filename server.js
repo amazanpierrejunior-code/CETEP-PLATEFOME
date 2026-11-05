@@ -175,7 +175,7 @@ db.prepare('UPDATE payments SET program_id=(SELECT program_id FROM students WHER
 db.prepare("UPDATE enrollments SET access_enabled=1 WHERE status='Actif' AND access_enabled=0").run();
 // CETEP passing threshold: 70/100. Upgrade legacy results that still carry the old 60/100 default.
 db.prepare("UPDATE final_results SET pass_mark=70, status=CASE WHEN score>=70 THEN 'Réussi' ELSE 'Échoué' END WHERE pass_mark=60").run();
-const defaults={school_name:'CETEP',school_full_name:"Centre d'Encadrement Technique et Professionnel",slogan:'Formation • Orientation • Insertion professionnelle',address:'Lamentin 54, Ruelle Crispin #856',phone:'+509 3601 8696 / +509 3736 5610 / +1 561-674-2890',email:'cetepecoleprofessionnelle@gmail.com',primary_color:'#0d2b52',secondary_color:'#1677b8',accent_color:'#087443',logo_text:'CETEP',logo_url:'',typography_font_family:'Arial,Helvetica,sans-serif',typography_font_size:'16px',typography_bold:'0',typography_italic:'0',typography_line_height:'1.5',certificate_intro:'Dans le cadre du renforcement des compétences techniques et professionnelles au Centre d’Encadrement Technique et Professionnel (CETEP).',certificate_city:'Carrefour',certificate_dg_name:'Agronome Livenson Fleuriot',certificate_dg_title:'Directeur Général',certificate_studies_name:'Wilio Joseph',certificate_studies_title:'Directeur des Études',certificate_extra_text:'',certificate_name_size:'15',certificate_program_size:'15',certificate_other_size:'12'};
+const defaults={school_name:'CETEP',school_full_name:"Centre d'Encadrement Technique et Professionnel",slogan:'Formation • Orientation • Insertion professionnelle',address:'Lamentin 54, Ruelle Crispin #856',phone:'+509 3601 8696 / +509 3736 5610 / +1 561-674-2890',email:'cetepecoleprofessionnelle@gmail.com',primary_color:'#0d2b52',secondary_color:'#1677b8',accent_color:'#087443',logo_text:'CETEP',logo_url:'',typography_font_family:'Arial,Helvetica,sans-serif',typography_font_size:'16px',typography_bold:'0',typography_italic:'0',typography_line_height:'1.5',certificate_intro:'Dans le cadre du renforcement des compétences techniques et professionnelles au Centre d’Encadrement Technique et Professionnel (CETEP).',certificate_city:'Carrefour',certificate_dg_name:'Agronome Livenson Fleuriot',certificate_dg_title:'Directeur Général',certificate_studies_name:'Wilio Joseph',certificate_studies_title:'Directeur des Études',certificate_extra_text:'',certificate_name_size:'20',certificate_program_size:'20',certificate_other_size:'16'};
 const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');for(const [k,v] of Object.entries(defaults))set.run(k,v);
 db.exec(`CREATE TABLE IF NOT EXISTS certificate_program_texts(program_id INTEGER PRIMARY KEY, intro TEXT NOT NULL DEFAULT '', extra_text TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
 
@@ -843,10 +843,8 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 
   // Le fond v15.2 reprend le modèle CETEP vierge approuvé; les champs variables sont imprimés une seule fois.
   // Chaque champ ci-dessous est donc imprimé une seule fois.
-  // Tailles imposées par le modèle validé : les anciennes valeurs enregistrées
-  // dans la base ne doivent plus écraser la correction typographique.
-  const nameSize=15;
-  const programSize=15;
+  const nameSize=20;
+  const programSize=20;
   doc.fillColor('#101b45').font('Times-Bold').fontSize(nameSize)
     .text(name,270,307,{width:304,height:32,align:'center',lineBreak:false,ellipsis:true});
 
@@ -857,9 +855,9 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   doc.fillColor('#101b45').font('Times-Bold').fontSize(programSize)
     .text(formation,294,374,{width:260,height:27,align:'center',lineBreak:false,ellipsis:true});
 
-  const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=55;
+  const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=45;
   const description=[intro,extra].filter(Boolean).join('\n');
-  let descriptionFont=12;
+  let descriptionFont=16;
   doc.font('Times-Roman').fontSize(descriptionFont);
   let descriptionHeight=doc.heightOfString(description,{width:paragraphW,align:'center',lineGap:0.6});
   while(descriptionHeight>paragraphMaxH && descriptionFont>8){
@@ -887,14 +885,14 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   const duration=String(c.duration||'Durée à préciser').trim();
   const periodValue=(start&&finish)?`${fmt(start)} – ${fmt(finish)}`:(start?`${fmt(start)} – fin à confirmer`:'Dates à confirmer');
   const metricY=474;
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(12)
-    .text(weeklyHours,178,metricY,{width:150,height:17,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(12)
-    .text(duration,338,metricY,{width:130,height:17,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Bold').fontSize(12)
-    .text(periodValue,490,metricY,{width:245,height:17,align:'center',lineBreak:false,ellipsis:true});
-  doc.fillColor('#101b45').font('Times-Roman').fontSize(12)
-    .text(`Fait à ${city}, le ${issued}`,315,492,{width:230,height:17,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(16)
+    .text(weeklyHours,178,metricY,{width:150,height:21,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(16)
+    .text(duration,338,metricY,{width:130,height:21,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Bold').fontSize(16)
+    .text(periodValue,490,metricY,{width:245,height:21,align:'center',lineBreak:false,ellipsis:true});
+  doc.fillColor('#101b45').font('Times-Roman').fontSize(16)
+    .text(`Fait à ${city}, le ${issued}`,315,492,{width:230,height:21,align:'center',lineBreak:false,ellipsis:true});
 
   // QR code individuel: il remplace le QR statique retiré du fond.
   const base=(process.env.PUBLIC_BASE_URL||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');
