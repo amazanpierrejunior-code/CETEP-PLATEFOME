@@ -843,21 +843,21 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 
   // Le fond v15.2 reprend le modèle CETEP vierge approuvé; les champs variables sont imprimés une seule fois.
   // Chaque champ ci-dessous est donc imprimé une seule fois.
-  // Tailles approuvées par le CETEP : nom et formation à 15 pt.
-  // Les réglages historiques en base ne doivent plus rétablir les anciennes tailles.
+  // Tailles imposées par le modèle validé : les anciennes valeurs enregistrées
+  // dans la base ne doivent plus écraser la correction typographique.
   const nameSize=15;
   const programSize=15;
   doc.fillColor('#101b45').font('Times-Bold').fontSize(nameSize)
-    .text(name,270,315,{width:304,height:32,align:'center',lineBreak:false,ellipsis:true});
+    .text(name,270,307,{width:304,height:32,align:'center',lineBreak:false,ellipsis:true});
 
   // La phrase « a suivi avec succès la formation en » est déjà présente
   // dans le modèle approuvé d'origine. Ne pas la redessiner ici : cela
   // provoquerait un doublon. Seuls le nom et le nom de la formation varient.
 
   doc.fillColor('#101b45').font('Times-Bold').fontSize(programSize)
-    .text(formation,294,382,{width:260,height:27,align:'center',lineBreak:false,ellipsis:true});
+    .text(formation,294,374,{width:260,height:27,align:'center',lineBreak:false,ellipsis:true});
 
-  const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=45;
+  const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=55;
   const description=[intro,extra].filter(Boolean).join('\n');
   let descriptionFont=12;
   doc.font('Times-Roman').fontSize(descriptionFont);
