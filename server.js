@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.3.0-autorisations-documents';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.0-comptabilite-depenses';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -81,6 +81,33 @@ CREATE TABLE IF NOT EXISTS certificates(
 CREATE TABLE IF NOT EXISTS certificate_admin_audit( id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL, program_id INTEGER NOT NULL, certificate_id INTEGER, actor_id INTEGER, actor_email TEXT, action TEXT NOT NULL, reason TEXT, conditions_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP );
 CREATE TABLE IF NOT EXISTS student_document_permissions(id INTEGER PRIMARY KEY AUTOINCREMENT,student_id INTEGER NOT NULL,program_id INTEGER NOT NULL,document_type TEXT NOT NULL CHECK(document_type IN ('certificate','transcript','attestation')),authorized INTEGER NOT NULL DEFAULT 0,updated_by INTEGER,updated_by_email TEXT,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(student_id,program_id,document_type),FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS student_document_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,student_id INTEGER NOT NULL,program_id INTEGER NOT NULL,document_type TEXT NOT NULL,authorized INTEGER NOT NULL,actor_id INTEGER,actor_email TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS expenses(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ expense_date TEXT NOT NULL,
+ category TEXT NOT NULL,
+ description TEXT NOT NULL,
+ payee TEXT NOT NULL,
+ amount_htg REAL NOT NULL CHECK(amount_htg>0),
+ method TEXT NOT NULL,
+ reference TEXT UNIQUE,
+ receipt TEXT,
+ status TEXT NOT NULL DEFAULT 'Enregistrée',
+ recorded_by INTEGER,
+ recorded_by_email TEXT,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS expense_audit(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ expense_id INTEGER,
+ actor_id INTEGER,
+ actor_email TEXT,
+ action TEXT NOT NULL,
+ details TEXT,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS attendance(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   student_id INTEGER NOT NULL,
@@ -675,8 +702,46 @@ app.post('/api/admin/local-sync',auth,role('admin'),(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','secretariat_audit','certificate_admin_audit','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v15.1.0.json"');res.send(JSON.stringify(out,null,2));});
-app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();db.prepare("UPDATE payments SET program_id=(SELECT program_id FROM students WHERE students.id=payments.student_id) WHERE program_id IS NULL").run();db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id,CASE WHEN status='Actif' THEN 'Actif' ELSE COALESCE(status,'En attente') END,CASE WHEN access_enabled=1 THEN 1 ELSE 0 END FROM students WHERE program_id IS NOT NULL").run();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
+
+// Comptabilité CETEP: dépenses traçables, annulation réversible et journal d'audit.
+const DEFAULT_EXPENSE_CATEGORIES=['Salè ak pèsonèl','Lwaye ak lokal','Kouran ak entènèt','Materyèl pedagojik','Ekipman ak mèb','Transpò ak deplasman','Aktivite ak gradyasyon','Piblisite ak kominikasyon','Bous ak sipò elèv','Antretyen ak reparasyon','Depans administratif','Lòt depans'];
+function expenseAudit(req,id,action,details){db.prepare('INSERT INTO expense_audit(expense_id,actor_id,actor_email,action,details) VALUES(?,?,?,?,?)').run(id||null,Number(req.user.id)||null,String(req.user.email||''),action,details||'');}
+app.get('/api/admin/expenses',auth,role('admin'),(req,res)=>{
+ const from=String(req.query.from||'').trim(),to=String(req.query.to||'').trim(),category=String(req.query.category||'').trim();
+ const validDate=x=>!x||/^\d{4}-\d{2}-\d{2}$/.test(x);
+ if(!validDate(from)||!validDate(to))return res.status(400).json({error:'Dat filtre a pa valab.'});
+ const where=["status<>'Annulé'"],params=[];
+ if(from){where.push('expense_date>=?');params.push(from)}
+ if(to){where.push('expense_date<=?');params.push(to)}
+ if(category){where.push('category=?');params.push(category)}
+ const expenses=db.prepare(`SELECT * FROM expenses WHERE ${where.join(' AND ')} ORDER BY expense_date DESC,id DESC`).all(...params);
+ const totalExpenses=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) n FROM expenses WHERE status<>'Annulé'").get().n);
+ const totalRevenue=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) n FROM payments WHERE status='Confirmé'").get().n)+Number(db.prepare("SELECT COALESCE(SUM(amount),0) n FROM donations WHERE status='Confirmé'").get().n);
+ const periodExpenses=Number(db.prepare(`SELECT COALESCE(SUM(amount_htg),0) n FROM expenses WHERE ${where.join(' AND ')}`).get(...params).n);
+ const revenueWhere=["status='Confirmé'"],rp=[];if(from){revenueWhere.push("date(created_at)>=?");rp.push(from)}if(to){revenueWhere.push("date(created_at)<=?");rp.push(to)}
+ const periodRevenue=Number(db.prepare(`SELECT COALESCE(SUM(amount_htg),0) n FROM payments WHERE ${revenueWhere.join(' AND ')}`).get(...rp).n)+Number(db.prepare(`SELECT COALESCE(SUM(amount),0) n FROM donations WHERE ${revenueWhere.join(' AND ')}`).get(...rp).n);
+ const byCategory=db.prepare(`SELECT category,SUM(amount_htg) total FROM expenses WHERE ${where.join(' AND ')} GROUP BY category ORDER BY total DESC`).all(...params);
+ const audit=db.prepare('SELECT * FROM expense_audit ORDER BY id DESC LIMIT 200').all();
+ res.json({categories:DEFAULT_EXPENSE_CATEGORIES,expenses,byCategory,audit,summary:{revenue:totalRevenue,expenses:totalExpenses,balance:totalRevenue-totalExpenses,count:expenses.length,period_revenue:periodRevenue,period_expenses:periodExpenses}});
+});
+app.post('/api/admin/expenses',auth,role('admin'),(req,res)=>{
+ const b=req.body||{},date=String(b.expense_date||''),category=String(b.category||'').trim(),description=String(b.description||'').trim(),payee=String(b.payee||'').trim(),method=String(b.method||'').trim(),amount=Number(b.amount_htg),reference=String(b.reference||'').trim()||null,receipt=String(b.receipt||'');
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!category||!description||!payee||!method||!Number.isFinite(amount)||amount<=0)return res.status(400).json({error:'Dat, kategori, deskripsyon, benefisyè, mòd peman ak montan pozitif obligatwa.'});
+ if(receipt&&(!/^data:image\/(png|jpeg|webp);base64,/i.test(receipt)||receipt.length>7*1024*1024))return res.status(400).json({error:'Resi a dwe yon imaj PNG/JPEG/WebP ki pa depase 5 Mo.'});
+ try{const info=db.prepare('INSERT INTO expenses(expense_date,category,description,payee,amount_htg,method,reference,receipt,recorded_by,recorded_by_email) VALUES(?,?,?,?,?,?,?,?,?,?)').run(date,category,description,payee,amount,method,reference,receipt||null,Number(req.user.id)||null,String(req.user.email||''));expenseAudit(req,info.lastInsertRowid,'CREATED',`${category} | ${amount} HTG | ${payee}`);res.json({ok:true,id:info.lastInsertRowid})}catch(e){if(String(e.message).includes('UNIQUE'))return res.status(409).json({error:'Referans tranzaksyon sa a deja itilize.'});res.status(400).json({error:e.message})}
+});
+app.put('/api/admin/expenses/:id',auth,role('admin'),(req,res)=>{
+ const id=Number(req.params.id),b=req.body||{},old=db.prepare("SELECT * FROM expenses WHERE id=? AND status<>'Annulé'").get(id);if(!old)return res.status(404).json({error:'Depans lan pa jwenn oswa li deja anile.'});
+ const amount=Number(b.amount_htg),description=String(b.description||'').trim(),payee=String(b.payee||'').trim();if(!Number.isFinite(amount)||amount<=0||!description||!payee)return res.status(400).json({error:'Montan, deskripsyon ak benefisyè obligatwa.'});
+ db.prepare("UPDATE expenses SET amount_htg=?,description=?,payee=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(amount,description,payee,id);expenseAudit(req,id,'UPDATED',`Montan: ${old.amount_htg} → ${amount}; benefisyè: ${payee}`);res.json({ok:true});
+});
+app.post('/api/admin/expenses/:id/void',auth,role('admin'),(req,res)=>{
+ const id=Number(req.params.id),row=db.prepare("SELECT * FROM expenses WHERE id=? AND status<>'Annulé'").get(id);if(!row)return res.status(404).json({error:'Depans lan pa jwenn oswa li deja anile.'});
+ db.prepare("UPDATE expenses SET status='Annulé',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);expenseAudit(req,id,'VOIDED',`${row.amount_htg} HTG | ${row.category} | ${row.payee}`);res.json({ok:true});
+});
+
+app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','secretariat_audit','certificate_admin_audit','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades','expenses','expense_audit'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v15.4.0.json"');res.send(JSON.stringify(out,null,2));});
+app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades','expenses','expense_audit'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();db.prepare("UPDATE payments SET program_id=(SELECT program_id FROM students WHERE students.id=payments.student_id) WHERE program_id IS NULL").run();db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id,CASE WHEN status='Actif' THEN 'Actif' ELSE COALESCE(status,'En attente') END,CASE WHEN access_enabled=1 THEN 1 ELSE 0 END FROM students WHERE program_id IS NOT NULL").run();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
 
 // Certificates & academic results
 // Academic administration: flexible number of terms per program and academic year.
@@ -789,6 +854,8 @@ app.get('/api/student/documents',auth,role('student'),(req,res)=>{
  if(!pid||!db.prepare('SELECT 1 FROM enrollments WHERE student_id=? AND program_id=?').get(sid,pid))return res.status(403).json({error:'Formation non autorisée.'});
  const cert=db.prepare("SELECT id,certificate_no,issued_at,status FROM certificates WHERE student_id=? AND program_id=?").get(sid,pid)||null;
  const grades=db.prepare('SELECT COUNT(*) c FROM academic_grades WHERE student_id=? AND program_id=?').get(sid,pid).c;
+ const result=db.prepare("SELECT score,pass_mark,status FROM final_results WHERE student_id=? AND program_id=?").get(sid,pid)||null;
+ const passed=!!result && result.status==='Réussi' && Number(result.score)>=Number(result.pass_mark);
  const perms=Object.fromEntries(DOCUMENT_TYPES.map(t=>[t,documentPermission(sid,pid,t)]));
  res.json({permissions:perms,available:{certificate:!!cert,transcript:Number(grades)>0,attestation:passed},certificate:cert});
 });
