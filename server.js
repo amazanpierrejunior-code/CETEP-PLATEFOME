@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.1-certificate-name-program-layout';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.2-certificate-name-program-size-fix';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -1037,17 +1037,17 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   // Chaque champ ci-dessous est donc imprimé une seule fois.
   // Ajustement approuvé par la direction : nom et formation légèrement plus bas,
   // avec une typographie plus grande. Aucun autre élément du certificat n'est déplacé.
-  const nameSize=safeSize(c.certificate_name_size,29,14,30);
-  const programSize=safeSize(c.certificate_program_size,25,14,26);
+  const nameSize=Math.max(29,safeSize(c.certificate_name_size,29,14,30));
+  const programSize=Math.max(25,safeSize(c.certificate_program_size,25,14,26));
   doc.fillColor('#101b45').font('Times-Bold').fontSize(nameSize)
-    .text(name,270,311,{width:304,height:35,align:'center',lineBreak:false,ellipsis:true});
+    .text(name,221,316,{width:400,height:38,align:'center',lineBreak:false,ellipsis:true});
 
   // La phrase « a suivi avec succès la formation en » est déjà présente
   // dans le modèle approuvé d'origine. Ne pas la redessiner ici : cela
   // provoquerait un doublon. Seuls le nom et le nom de la formation varient.
 
   doc.fillColor('#101b45').font('Times-Bold').fontSize(programSize)
-    .text(formation,280,376,{width:288,height:28,align:'center',lineBreak:false,ellipsis:true});
+    .text(formation,221,379,{width:400,height:30,align:'center',lineBreak:false,ellipsis:true});
 
   const paragraphX=183, paragraphY=404, paragraphW=485, paragraphMaxH=45;
   const description=[intro,extra].filter(Boolean).join('\n');
