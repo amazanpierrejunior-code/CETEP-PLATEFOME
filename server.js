@@ -191,6 +191,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS secretariat_audit(
 );`);
 
 ensureColumn('programs','monthly_fee_htg','REAL DEFAULT 0');
+ensureColumn('programs','program_group','TEXT');
+ensureColumn("programs","fee_period","TEXT DEFAULT 'Mensualité'");
 ensureColumn('enrollments','access_enabled','INTEGER DEFAULT 0');
 ensureColumn('enrollments','manual_authorized','INTEGER DEFAULT 0');
 // Preserve old single-program records when upgrading to multi-program enrollment.
@@ -201,6 +203,9 @@ db.prepare("UPDATE enrollments SET access_enabled=1 WHERE status='Actif' AND acc
 db.prepare("UPDATE final_results SET pass_mark=70, status=CASE WHEN score>=70 THEN 'Réussi' ELSE 'Échoué' END WHERE pass_mark=60").run();
 const defaults={school_name:'CETEP',school_full_name:"Centre d'Encadrement Technique et Professionnel",slogan:'Formation • Orientation • Insertion professionnelle',address:'Lamentin 54, Ruelle Crispin #856',phone:'+509 3601 8696 / +509 3736 5610 / +1 561-674-2890',email:'cetepecoleprofessionnelle@gmail.com',primary_color:'#0d2b52',secondary_color:'#1677b8',accent_color:'#087443',logo_text:'CETEP',logo_url:'',typography_font_family:'Arial,Helvetica,sans-serif',typography_font_size:'16px',typography_bold:'0',typography_italic:'0',typography_line_height:'1.5',certificate_intro:'Dans le cadre du renforcement des compétences techniques et professionnelles au Centre d’Encadrement Technique et Professionnel (CETEP).',certificate_city:'Carrefour',certificate_dg_name:'Agronome Livenson Fleuriot',certificate_dg_title:'Directeur Général',certificate_studies_name:'Wilio Joseph',certificate_studies_title:'Directeur des Études',certificate_extra_text:'',certificate_name_size:'15',certificate_program_size:'15',certificate_other_size:'12'};
 const set=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');for(const [k,v] of Object.entries(defaults))set.run(k,v);
+// Frais généraux relevés sur le flyer CETEP : conservés en HTG dans la base.
+set.run('general_registration_fee_htg','200');
+set.run('uniform_badge_fee_htg','400');
 db.prepare("INSERT OR IGNORE INTO role_permissions(role,permission,allowed) VALUES('secretary','send_messages',0)").run();
 for(const [k,v] of Object.entries({payment_reminders_enabled:'0',payment_reminder_due_day:'5',payment_reminder_email:'0',payment_reminder_text:'Chè {name}, nou fè w sonje gen yon balans {balance} HTG ki poko peye pou fòmasyon {program} pou peryòd {period}. Tanpri kontakte CETEP pou regilarize peman ou. Mèsi.'})) set.run(k,v);
 db.exec(`CREATE TABLE IF NOT EXISTS certificate_program_texts(program_id INTEGER PRIMARY KEY, intro TEXT NOT NULL DEFAULT '', extra_text TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
@@ -272,6 +277,58 @@ const legacyCombinedPrograms=[
 ];
 const deactivateLegacyProgram=db.prepare('UPDATE programs SET active=0 WHERE name=?');
 for(const legacyName of legacyCombinedPrograms) deactivateLegacyProgram.run(legacyName);
+// Catalogue et tarifs extraits du flyer CETEP fourni le 7 novembre 2026.
+// Chaque option reste un programme autonome (ID, inscriptions, paiements, notes et certificat).
+// program_group sert uniquement à présenter les options sous leur formation principale.
+const flyerPrograms = [
+ ['Anglais','1 an','Langues','600','300','Mensualité','Formation en langue anglaise.'],
+ ['Espagnol','1 an','Langues','600','300','Mensualité','Formation en langue espagnole.'],
+ ['Français','1 an','Langues','600','300','Mensualité','Formation en langue française.'],
+ ['Communication','1 an','Langues','600','300','Mensualité','Formation en communication.'],
+ ['Cuisine','9 mois','Cuisine et couture','1000','350','Mensualité','Formation en cuisine.'],
+ ['Pâtisserie','18 mois','Cuisine et couture','1000','350','Mensualité','Formation en pâtisserie.'],
+ ['Couture','18 mois','Cuisine et couture','1000','350','Mensualité','Formation en couture.'],
+ ['Décoration gâteau','6 mois','Décoration gâteau','800','300','Mensualité','Formation en décoration de gâteaux.'],
+ ['Comptabilité informatisée','14 mois','Comptabilité informatisée','600','350','Mensualité','Formation en comptabilité informatisée.'],
+ ['Hôtellerie et Tourisme','14 mois','Hôtellerie et Tourisme','800','500','Mensualité','Formation en hôtellerie et tourisme.'],
+ ['Entrepreneuriat','14 mois','Hôtellerie et Tourisme','800','500','Mensualité','Formation en entrepreneuriat.'],
+ ['Technique vocal','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en technique vocale.'],
+ ['Montage Vidéo','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en montage vidéo.'],
+ ['Vidéographie et Photographie','6 mois','Vidéographie et Photographie','800','950','Trimestriel','Formation combinée en vidéographie et photographie.'],
+ ['Carrelage','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en carrelage.'],
+ ['Plomberie','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en plomberie.'],
+ ['Secourisme de base','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en secourisme de base.'],
+ ['Technique Windows','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en technique Windows.'],
+ ['Aide-soignant(e)','12 mois','Aide-soignant(e)','1500','950','Trimestriel','Formation aide-soignante.'],
+ ['Auto-école','2 mois','Auto-école','0','300','Mensualité','Formation de conduite automobile.'],
+ ['Peinture','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en peinture.'],
+ ['Sérigraphie','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en sérigraphie.'],
+ ['Dépannage Cellulaire','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en dépannage de téléphones cellulaires.'],
+ ['Make-up','6 mois','Beauté','500','350','Mensualité','Formation en maquillage professionnel.'],
+ ['Manicure','6 mois','Beauté','500','350','Mensualité','Formation en manucure.'],
+ ['Logistique et Gestion de Stock','3 mois','Logistique et Gestion de Stock','0','500','Mensualité','Formation en logistique et gestion de stock.'],
+ ['Électricité','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en électricité.'],
+ ['Informatique Bureautique','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en informatique bureautique.'],
+ ['Dépannage d’Ordinateur','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en dépannage d’ordinateur.'],
+ ['Cosmétologie','9 mois','Beauté','600','500','Mensualité','Formation en cosmétologie.'],
+ ['Décoration Événementielle','6 mois','Décoration événementielle','600','300','Mensualité','Formation en décoration événementielle.'],
+ ['Auxiliaire','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation auxiliaire.'],
+ ['Ferronnerie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en ferronnerie.'],
+ ['Pharmacie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en pharmacie.']
+];
+const findProgram=db.prepare('SELECT id FROM programs WHERE lower(trim(name))=lower(trim(?)) ORDER BY active DESC,id LIMIT 1');
+const addFlyerProgram=db.prepare('INSERT INTO programs(name,duration,description,price_htg,monthly_fee_htg,program_group,fee_period,active) VALUES(?,?,?,?,?,?,?,1)');
+const updateFlyerProgram=db.prepare('UPDATE programs SET duration=?,description=CASE WHEN description IS NULL OR trim(description)=\'\' THEN ? ELSE description END,price_htg=?,monthly_fee_htg=?,program_group=?,fee_period=?,active=1 WHERE id=?');
+for(const [name,duration,group,entry,fee,period,description] of flyerPrograms){
+ const old=findProgram.get(name);
+ if(old) updateFlyerProgram.run(duration,description,Number(entry),Number(fee),group,period,old.id);
+ else addFlyerProgram.run(name,duration,description,Number(entry),Number(fee),group,period);
+}
+// Harmonise quelques variantes historiques sans supprimer les dossiers déjà rattachés.
+for(const [from,to] of [['Informatique bureautique','Informatique Bureautique'],['Dépannage d’ordinateur','Dépannage d’Ordinateur'],['Make-Up','Make-up']]){
+ const a=findProgram.get(from), b=findProgram.get(to); if(a && b && a.id!==b.id) db.prepare('UPDATE programs SET active=0 WHERE id=?').run(a.id);
+}
+
 // Migration unique: l'ancienne version indiquait 6 mois pour l'informatique bureautique.
 // On corrige une seule fois les anciennes installations, puis l'administrateur reste libre
 // de modifier cette durée depuis le bouton Modifier dans Formations.
@@ -580,7 +637,7 @@ function runPaymentReminderJob(){
  const candidates=db.prepare(`SELECT s.id student_id,s.name,s.email,p.id program_id,p.name program_name,COALESCE(p.monthly_fee_htg,0) fee,
  CASE WHEN EXISTS(SELECT 1 FROM payments q WHERE q.student_id=s.id AND q.program_id=p.id AND q.status='Confirmé' AND q.payment_category='Trimestriel' AND date(q.created_at)>=date(?) AND date(q.created_at)<date(?, '+3 months')) THEN COALESCE(p.monthly_fee_htg,0) ELSE COALESCE((SELECT SUM(x.amount_htg) FROM payments x WHERE x.student_id=s.id AND x.program_id=p.id AND x.status='Confirmé' AND x.payment_category='Mensualité' AND COALESCE(x.billing_period,x.billing_month)=?),0) END paid
  FROM enrollments e JOIN students s ON s.id=e.student_id JOIN programs p ON p.id=e.program_id
- WHERE e.status='Actif' AND p.active=1 AND COALESCE(p.monthly_fee_htg,0)>0`).all(quarterStart,quarterStart,period);
+ WHERE e.status='Actif' AND p.active=1 AND COALESCE(p.monthly_fee_htg,0)>0 AND COALESCE(p.fee_period,'Mensualité')='Mensualité'`).all(quarterStart,quarterStart,period);
  let sent=0;const tpl=String(st.payment_reminder_text||'Chè {name}, gen yon balans {balance} HTG pou {program} ({period}).');
  for(const x of candidates){const balance=Math.max(0,Number(x.fee)-Number(x.paid));if(balance<=0)continue;
  const key=`payment-reminder:${period}:${x.student_id}:${x.program_id}`;
