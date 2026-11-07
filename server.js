@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.5-catalogue-options-tarifs';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.6-options-decoration-resine';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -314,7 +314,7 @@ const flyerPrograms = [
  ['Informatique Bureautique','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en informatique bureautique.'],
  ['Dépannage d’Ordinateur','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en dépannage d’ordinateur.'],
  ['Cosmétologie','9 mois','Beauté','600','500','Mensualité','Formation en cosmétologie.'],
- ['Décoration Événementielle','6 mois','Décoration événementielle','600','300','Mensualité','Formation en décoration événementielle.'],
+ ['Décoration Événementielle','6 mois','Décoration et création','600','300','Mensualité','Formation en décoration événementielle.'],
  ['Auxiliaire','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation auxiliaire.'],
  ['Ferronnerie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en ferronnerie.'],
  ['Pharmacie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en pharmacie.']
@@ -326,6 +326,13 @@ for(const [name,duration,group,entry,fee,period,description] of flyerPrograms){
  const old=findProgram.get(name);
  if(old) updateFlyerProgram.run(duration,description,Number(entry),Number(fee),group,period,old.id);
  else addFlyerProgram.run(name,duration,description,Number(entry),Number(fee),group,period);
+}
+// Résine est une option indépendante de Décoration événementielle.
+// Le flyer transmis ne donne pas de tarif spécifique pour Résine : on conserve
+// ses montants existants (ou 0 sur une nouvelle installation) sans inventer de prix.
+const resinProgram=findProgram.get('Résine');
+if(resinProgram){
+  db.prepare("UPDATE programs SET program_group='Décoration et création', active=1, duration=CASE WHEN duration IS NULL OR trim(duration)='' THEN '3 à 6 mois' ELSE duration END WHERE id=?").run(resinProgram.id);
 }
 // Harmonise quelques variantes historiques sans supprimer les dossiers déjà rattachés.
 for(const [from,to] of [['Informatique bureautique','Informatique Bureautique'],['Dépannage d’ordinateur','Dépannage d’Ordinateur'],['Make-Up','Make-up']]){
