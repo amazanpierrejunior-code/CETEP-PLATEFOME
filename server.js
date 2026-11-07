@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.6-options-decoration-resine';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.7-catalogue-after-neon-restore';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -236,115 +236,137 @@ function synchronizeAdminAccount(){
   }
   return changed;
 }
-// Catalogue de base CETEP : on conserve les formations existantes et on ajoute
-// les formations officielles visibles sur le flyer. Cette logique n'écrase jamais
-// une formation déjà enregistrée dans la base.
-const basePrograms=[
-  ['Secourisme de base','9 mois','Formation aux premiers secours et à la sécurité.'],
-  ['Aide-soignant(e)','9 mois','Formation orientée vers les soins de base.'],
-  ['Électricité bâtiment','6 mois','Installation et maintenance électrique.'],
-  ['Plomberie','6 mois','Installation et entretien des réseaux de plomberie.'],
-  ['Sérigraphie','3 mois','Techniques professionnelles de sérigraphie.'],
-  ['Vidéographie','4 mois','Formation pratique en prise de vue, cadrage et réalisation vidéo.'],
-  ['Photographie','4 mois','Formation pratique en prise de vue, lumière et composition photographique.'],
-  ['Anglais','9 mois','Formation indépendante en langue anglaise.'],
-  ['Espagnol','9 mois','Formation indépendante en langue espagnole.'],
-  ['Onglerie','3 à 6 mois','Formation pratique en soins et techniques professionnelles des ongles.'],
-  ['Cosmétologie','3 à 6 mois','Formation indépendante en cosmétologie et soins esthétiques.'],
-  ['Make-up','3 à 6 mois','Formation indépendante en maquillage professionnel.'],
-  ['Décoration événementielle','3 à 6 mois','Formation indépendante en décoration événementielle.'],
-  ['Résine','3 à 6 mois','Formation indépendante aux techniques professionnelles de résine.'],
-  ['Carrelage','4 à 6 mois','Formation pratique en pose et finition de carrelage.'],
-  ['Informatique bureautique','1 an','Formation en informatique et outils bureautiques.'],
-  ['Dread Locks','2 mois','Formation pratique en dread locks et coiffure spécialisée.']
-];
-const insertProgram=db.prepare('INSERT INTO programs(name,duration,description,price_htg) VALUES(?,?,?,?)');
-for(const [name,duration,description] of basePrograms){
-  if(!db.prepare('SELECT 1 FROM programs WHERE name=? LIMIT 1').get(name)){
-    insertProgram.run(name,duration,description,0);
+// IMPORTANT: ce catalogue doit être appliqué APRÈS la restauration du snapshot Neon.
+// La migration est versionnée et exécutée une seule fois afin de ne pas écraser
+// les tarifs que l'administration modifiera ultérieurement.
+function applyCatalogMigrations(){
+  const migrationKey='catalog_options_v1546_migrated';
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(migrationKey)){
+    console.log('[CETEP CATALOGUE] Migration v15.4.6 déjà appliquée.');
+    return {applied:false};
   }
-}
-// Séparation du catalogue : les anciens parcours regroupés sont conservés pour
-// l'historique, mais désactivés dans les nouveaux formulaires. Aucune inscription,
-// note, facture, paiement, module ou certificat historique n'est déplacé ni supprimé.
-const legacyCombinedPrograms=[
-  'Anglais, Espagnol',
-  'Vidéographie et Photographie',
-  'Onglerie, Cosmétologie, Make-up',
-  'Décoration événementielle, Résine',
-  'Carrelage, Plomberie, Électricité',
-  'Secourisme et Aide-soignant'
-];
-const deactivateLegacyProgram=db.prepare('UPDATE programs SET active=0 WHERE name=?');
-for(const legacyName of legacyCombinedPrograms) deactivateLegacyProgram.run(legacyName);
-// Vidéographie et Photographie est une seule formation combinée sur le flyer :
-// les anciennes lignes autonomes restent dans l'historique mais ne sont plus proposées.
-for(const legacyName of ['Vidéographie','Photographie']) deactivateLegacyProgram.run(legacyName);
-// Catalogue et tarifs extraits du flyer CETEP fourni le 7 novembre 2026.
-// Chaque option reste un programme autonome (ID, inscriptions, paiements, notes et certificat).
-// program_group sert uniquement à présenter les options sous leur formation principale.
-const flyerPrograms = [
- ['Anglais','1 an','Langues','600','300','Mensualité','Formation en langue anglaise.'],
- ['Espagnol','1 an','Langues','600','300','Mensualité','Formation en langue espagnole.'],
- ['Français','1 an','Langues','600','300','Mensualité','Formation en langue française.'],
- ['Communication','1 an','Langues','600','300','Mensualité','Formation en communication.'],
- ['Cuisine','9 mois','Cuisine et couture','1000','350','Mensualité','Formation en cuisine.'],
- ['Pâtisserie','18 mois','Cuisine et couture','1000','350','Mensualité','Formation en pâtisserie.'],
- ['Couture','18 mois','Cuisine et couture','1000','350','Mensualité','Formation en couture.'],
- ['Décoration gâteau','6 mois','Décoration gâteau','800','300','Mensualité','Formation en décoration de gâteaux.'],
- ['Comptabilité informatisée','14 mois','Comptabilité informatisée','600','350','Mensualité','Formation en comptabilité informatisée.'],
- ['Hôtellerie et Tourisme','14 mois','Hôtellerie et Tourisme','800','500','Mensualité','Formation en hôtellerie et tourisme.'],
- ['Entrepreneuriat','14 mois','Hôtellerie et Tourisme','800','500','Mensualité','Formation en entrepreneuriat.'],
- ['Technique vocal','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en technique vocale.'],
- ['Montage Vidéo','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en montage vidéo.'],
- ['Vidéographie et Photographie','6 mois','Vidéographie et Photographie','800','950','Trimestriel','Formation combinée en vidéographie et photographie.'],
- ['Carrelage','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en carrelage.'],
- ['Plomberie','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en plomberie.'],
- ['Secourisme de base','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en secourisme de base.'],
- ['Technique Windows','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en technique Windows.'],
- ['Aide-soignant(e)','12 mois','Aide-soignant(e)','1500','950','Trimestriel','Formation aide-soignante.'],
- ['Auto-école','2 mois','Auto-école','0','300','Mensualité','Formation de conduite automobile.'],
- ['Peinture','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en peinture.'],
- ['Sérigraphie','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en sérigraphie.'],
- ['Dépannage Cellulaire','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en dépannage de téléphones cellulaires.'],
- ['Make-up','6 mois','Beauté','500','350','Mensualité','Formation en maquillage professionnel.'],
- ['Manicure','6 mois','Beauté','500','350','Mensualité','Formation en manucure.'],
- ['Logistique et Gestion de Stock','3 mois','Logistique et Gestion de Stock','0','500','Mensualité','Formation en logistique et gestion de stock.'],
- ['Électricité','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en électricité.'],
- ['Informatique Bureautique','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en informatique bureautique.'],
- ['Dépannage d’Ordinateur','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en dépannage d’ordinateur.'],
- ['Cosmétologie','9 mois','Beauté','600','500','Mensualité','Formation en cosmétologie.'],
- ['Décoration Événementielle','6 mois','Décoration et création','600','300','Mensualité','Formation en décoration événementielle.'],
- ['Auxiliaire','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation auxiliaire.'],
- ['Ferronnerie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en ferronnerie.'],
- ['Pharmacie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en pharmacie.']
-];
-const findProgram=db.prepare('SELECT id FROM programs WHERE lower(trim(name))=lower(trim(?)) ORDER BY active DESC,id LIMIT 1');
-const addFlyerProgram=db.prepare('INSERT INTO programs(name,duration,description,price_htg,monthly_fee_htg,program_group,fee_period,active) VALUES(?,?,?,?,?,?,?,1)');
-const updateFlyerProgram=db.prepare('UPDATE programs SET duration=?,description=CASE WHEN description IS NULL OR trim(description)=\'\' THEN ? ELSE description END,price_htg=?,monthly_fee_htg=?,program_group=?,fee_period=?,active=1 WHERE id=?');
-for(const [name,duration,group,entry,fee,period,description] of flyerPrograms){
- const old=findProgram.get(name);
- if(old) updateFlyerProgram.run(duration,description,Number(entry),Number(fee),group,period,old.id);
- else addFlyerProgram.run(name,duration,description,Number(entry),Number(fee),group,period);
-}
-// Résine est une option indépendante de Décoration événementielle.
-// Le flyer transmis ne donne pas de tarif spécifique pour Résine : on conserve
-// ses montants existants (ou 0 sur une nouvelle installation) sans inventer de prix.
-const resinProgram=findProgram.get('Résine');
-if(resinProgram){
-  db.prepare("UPDATE programs SET program_group='Décoration et création', active=1, duration=CASE WHEN duration IS NULL OR trim(duration)='' THEN '3 à 6 mois' ELSE duration END WHERE id=?").run(resinProgram.id);
-}
-// Harmonise quelques variantes historiques sans supprimer les dossiers déjà rattachés.
-for(const [from,to] of [['Informatique bureautique','Informatique Bureautique'],['Dépannage d’ordinateur','Dépannage d’Ordinateur'],['Make-Up','Make-up']]){
- const a=findProgram.get(from), b=findProgram.get(to); if(a && b && a.id!==b.id) db.prepare('UPDATE programs SET active=0 WHERE id=?').run(a.id);
-}
+  const runMigration=db.transaction(()=>{
+  // Catalogue de base CETEP : on conserve les formations existantes et on ajoute
+  // les formations officielles visibles sur le flyer. Cette logique n'écrase jamais
+  // une formation déjà enregistrée dans la base.
+  const basePrograms=[
+    ['Secourisme de base','9 mois','Formation aux premiers secours et à la sécurité.'],
+    ['Aide-soignant(e)','9 mois','Formation orientée vers les soins de base.'],
+    ['Électricité bâtiment','6 mois','Installation et maintenance électrique.'],
+    ['Plomberie','6 mois','Installation et entretien des réseaux de plomberie.'],
+    ['Sérigraphie','3 mois','Techniques professionnelles de sérigraphie.'],
+    ['Vidéographie','4 mois','Formation pratique en prise de vue, cadrage et réalisation vidéo.'],
+    ['Photographie','4 mois','Formation pratique en prise de vue, lumière et composition photographique.'],
+    ['Anglais','9 mois','Formation indépendante en langue anglaise.'],
+    ['Espagnol','9 mois','Formation indépendante en langue espagnole.'],
+    ['Onglerie','3 à 6 mois','Formation pratique en soins et techniques professionnelles des ongles.'],
+    ['Cosmétologie','3 à 6 mois','Formation indépendante en cosmétologie et soins esthétiques.'],
+    ['Make-up','3 à 6 mois','Formation indépendante en maquillage professionnel.'],
+    ['Décoration événementielle','3 à 6 mois','Formation indépendante en décoration événementielle.'],
+    ['Résine','3 à 6 mois','Formation indépendante aux techniques professionnelles de résine.'],
+    ['Carrelage','4 à 6 mois','Formation pratique en pose et finition de carrelage.'],
+    ['Informatique bureautique','1 an','Formation en informatique et outils bureautiques.'],
+    ['Dread Locks','2 mois','Formation pratique en dread locks et coiffure spécialisée.']
+  ];
+  const insertProgram=db.prepare('INSERT INTO programs(name,duration,description,price_htg) VALUES(?,?,?,?)');
+  for(const [name,duration,description] of basePrograms){
+    if(!db.prepare('SELECT 1 FROM programs WHERE name=? LIMIT 1').get(name)){
+      insertProgram.run(name,duration,description,0);
+    }
+  }
+  // Séparation du catalogue : les anciens parcours regroupés sont conservés pour
+  // l'historique, mais désactivés dans les nouveaux formulaires. Aucune inscription,
+  // note, facture, paiement, module ou certificat historique n'est déplacé ni supprimé.
+  const legacyCombinedPrograms=[
+    'Anglais, Espagnol',
+    'Vidéographie et Photographie',
+    'Onglerie, Cosmétologie, Make-up',
+    'Décoration événementielle, Résine',
+    'Carrelage, Plomberie, Électricité',
+    'Secourisme et Aide-soignant'
+  ];
+  const deactivateLegacyProgram=db.prepare('UPDATE programs SET active=0 WHERE name=?');
+  for(const legacyName of legacyCombinedPrograms) deactivateLegacyProgram.run(legacyName);
+  // Vidéographie et Photographie est une seule formation combinée sur le flyer :
+  // les anciennes lignes autonomes restent dans l'historique mais ne sont plus proposées.
+  for(const legacyName of ['Vidéographie','Photographie']) deactivateLegacyProgram.run(legacyName);
+  // Catalogue et tarifs extraits du flyer CETEP fourni le 7 novembre 2026.
+  // Chaque option reste un programme autonome (ID, inscriptions, paiements, notes et certificat).
+  // program_group sert uniquement à présenter les options sous leur formation principale.
+  const flyerPrograms = [
+   ['Anglais','1 an','Langues','600','300','Mensualité','Formation en langue anglaise.'],
+   ['Espagnol','1 an','Langues','600','300','Mensualité','Formation en langue espagnole.'],
+   ['Français','1 an','Langues','600','300','Mensualité','Formation en langue française.'],
+   ['Communication','1 an','Langues','600','300','Mensualité','Formation en communication.'],
+   ['Cuisine','9 mois','Cuisine et couture','1000','350','Mensualité','Formation en cuisine.'],
+   ['Pâtisserie','18 mois','Cuisine et couture','1000','350','Mensualité','Formation en pâtisserie.'],
+   ['Couture','18 mois','Cuisine et couture','1000','350','Mensualité','Formation en couture.'],
+   ['Décoration gâteau','6 mois','Décoration gâteau','800','300','Mensualité','Formation en décoration de gâteaux.'],
+   ['Comptabilité informatisée','14 mois','Comptabilité informatisée','600','350','Mensualité','Formation en comptabilité informatisée.'],
+   ['Hôtellerie et Tourisme','14 mois','Hôtellerie et Tourisme','800','500','Mensualité','Formation en hôtellerie et tourisme.'],
+   ['Entrepreneuriat','14 mois','Hôtellerie et Tourisme','800','500','Mensualité','Formation en entrepreneuriat.'],
+   ['Technique vocal','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en technique vocale.'],
+   ['Montage Vidéo','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en montage vidéo.'],
+   ['Vidéographie et Photographie','6 mois','Vidéographie et Photographie','800','950','Trimestriel','Formation combinée en vidéographie et photographie.'],
+   ['Carrelage','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en carrelage.'],
+   ['Plomberie','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en plomberie.'],
+   ['Secourisme de base','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en secourisme de base.'],
+   ['Technique Windows','6 mois','Métiers techniques et artistiques','800','950','Trimestriel','Formation en technique Windows.'],
+   ['Aide-soignant(e)','12 mois','Aide-soignant(e)','1500','950','Trimestriel','Formation aide-soignante.'],
+   ['Auto-école','2 mois','Auto-école','0','300','Mensualité','Formation de conduite automobile.'],
+   ['Peinture','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en peinture.'],
+   ['Sérigraphie','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en sérigraphie.'],
+   ['Dépannage Cellulaire','3 mois','Métiers de finition et impression','500','300','Mensualité','Formation en dépannage de téléphones cellulaires.'],
+   ['Make-up','6 mois','Beauté','500','350','Mensualité','Formation en maquillage professionnel.'],
+   ['Manicure','6 mois','Beauté','500','350','Mensualité','Formation en manucure.'],
+   ['Logistique et Gestion de Stock','3 mois','Logistique et Gestion de Stock','0','500','Mensualité','Formation en logistique et gestion de stock.'],
+   ['Électricité','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en électricité.'],
+   ['Informatique Bureautique','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en informatique bureautique.'],
+   ['Dépannage d’Ordinateur','9 mois','Métiers techniques informatiques et électriques','600','400','Mensualité','Formation en dépannage d’ordinateur.'],
+   ['Cosmétologie','9 mois','Beauté','600','500','Mensualité','Formation en cosmétologie.'],
+   ['Décoration Événementielle','6 mois','Décoration et création','600','300','Mensualité','Formation en décoration événementielle.'],
+   ['Auxiliaire','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation auxiliaire.'],
+   ['Ferronnerie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en ferronnerie.'],
+   ['Pharmacie','24 mois','Auxiliaire, Ferronnerie et Pharmacie','1500','600','Mensualité','Formation en pharmacie.']
+  ];
+  const findProgram=db.prepare('SELECT id FROM programs WHERE lower(trim(name))=lower(trim(?)) ORDER BY active DESC,id LIMIT 1');
+  const addFlyerProgram=db.prepare('INSERT INTO programs(name,duration,description,price_htg,monthly_fee_htg,program_group,fee_period,active) VALUES(?,?,?,?,?,?,?,1)');
+  const updateFlyerProgram=db.prepare('UPDATE programs SET duration=?,description=CASE WHEN description IS NULL OR trim(description)=\'\' THEN ? ELSE description END,price_htg=?,monthly_fee_htg=?,program_group=?,fee_period=?,active=1 WHERE id=?');
+  for(const [name,duration,group,entry,fee,period,description] of flyerPrograms){
+   const old=findProgram.get(name);
+   if(old) updateFlyerProgram.run(duration,description,Number(entry),Number(fee),group,period,old.id);
+   else addFlyerProgram.run(name,duration,description,Number(entry),Number(fee),group,period);
+  }
+  // Résine est une option indépendante de Décoration événementielle.
+  // Le flyer transmis ne donne pas de tarif spécifique pour Résine : on conserve
+  // ses montants existants (ou 0 sur une nouvelle installation) sans inventer de prix.
+  const resinProgram=findProgram.get('Résine');
+  if(resinProgram){
+    db.prepare("UPDATE programs SET program_group='Décoration et création', active=1, duration=CASE WHEN duration IS NULL OR trim(duration)='' THEN '3 à 6 mois' ELSE duration END WHERE id=?").run(resinProgram.id);
+  }
+  // Harmonise quelques variantes historiques sans supprimer les dossiers déjà rattachés.
+  for(const [from,to] of [['Informatique bureautique','Informatique Bureautique'],['Dépannage d’ordinateur','Dépannage d’Ordinateur'],['Make-Up','Make-up']]){
+   const a=findProgram.get(from), b=findProgram.get(to); if(a && b && a.id!==b.id) db.prepare('UPDATE programs SET active=0 WHERE id=?').run(a.id);
+  }
 
-// Migration unique: l'ancienne version indiquait 6 mois pour l'informatique bureautique.
-// On corrige une seule fois les anciennes installations, puis l'administrateur reste libre
-// de modifier cette durée depuis le bouton Modifier dans Formations.
-if(!db.prepare("SELECT 1 FROM settings WHERE key='informatique_duration_v1_migrated'").get()){
-  db.prepare("UPDATE programs SET duration='1 an' WHERE name='Informatique bureautique' AND (duration IS NULL OR TRIM(duration)='' OR duration='6 mois')").run();
-  db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES('informatique_duration_v1_migrated','1')").run();
+  // Migration unique: l'ancienne version indiquait 6 mois pour l'informatique bureautique.
+  // On corrige une seule fois les anciennes installations, puis l'administrateur reste libre
+  // de modifier cette durée depuis le bouton Modifier dans Formations.
+  if(!db.prepare("SELECT 1 FROM settings WHERE key='informatique_duration_v1_migrated'").get()){
+    db.prepare("UPDATE programs SET duration='1 an' WHERE name='Informatique bureautique' AND (duration IS NULL OR TRIM(duration)='' OR duration='6 mois')").run();
+    db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES('informatique_duration_v1_migrated','1')").run();
+  }
+    const required=['Anglais','Espagnol','Français','Communication','Carrelage','Plomberie','Électricité','Décoration Événementielle','Résine','Vidéographie et Photographie'];
+    const missing=required.filter(name=>!db.prepare('SELECT 1 FROM programs WHERE lower(trim(name))=lower(trim(?)) AND active=1').get(name));
+    if(missing.length) throw new Error('Options CETEP manquantes après migration: '+missing.join(', '));
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(migrationKey,new Date().toISOString());
+    const active=db.prepare('SELECT COUNT(*) AS n FROM programs WHERE active=1').get().n;
+    const inactive=db.prepare('SELECT COUNT(*) AS n FROM programs WHERE active=0').get().n;
+    return {applied:true,active,inactive};
+  });
+  const result=runMigration();
+  console.log('[CETEP CATALOGUE] Migration v15.4.6 appliquée après restauration Neon:',result);
+  return result;
 }
 // Promotions CETEP par défaut : elles sont ajoutées automatiquement sans supprimer
 // les publications déjà présentes. L'administrateur peut ensuite les modifier ou les supprimer.
@@ -1327,10 +1349,19 @@ async function startCETEP(){
         console.log('[CETEP] Premiers enregistrements CETEP copiés dans Neon.');
       }
     }
-    installNeonWriteTracking();
-    console.log('[CETEP] Persistance Neon activée.');
+    console.log('[CETEP] Persistance Neon restaurée; migrations applicatives en attente.');
   }else{
     console.warn('[CETEP] DATABASE_URL absent: mode local uniquement, non recommandé en production.');
+  }
+  // Ordre impératif: restaurer Neon, migrer le catalogue, sauvegarder, puis ouvrir HTTP.
+  const catalogMigration=applyCatalogMigrations();
+  if(neonSql && catalogMigration.applied){
+    await flushNeonSnapshot();
+    console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
+  }
+  if(neonSql){
+    installNeonWriteTracking();
+    console.log('[CETEP] Persistance Neon activée.');
   }
   // Critical order: restore Neon first, then apply admin bootstrap/reset, then persist it.
   const adminChanged=synchronizeAdminAccount();
