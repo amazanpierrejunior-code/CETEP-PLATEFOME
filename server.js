@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.2-certificate-name-program-size-fix';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.3-programmes-separes';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -240,12 +240,16 @@ const basePrograms=[
   ['Électricité bâtiment','6 mois','Installation et maintenance électrique.'],
   ['Plomberie','6 mois','Installation et entretien des réseaux de plomberie.'],
   ['Sérigraphie','3 mois','Techniques professionnelles de sérigraphie.'],
-  ['Secourisme et Aide-soignant','9 mois','Parcours regroupant le secourisme et les soins de base, selon le catalogue promotionnel CETEP.'],
-  ['Vidéographie et Photographie','4 mois','Formation pratique en vidéographie et photographie.'],
-  ['Anglais, Espagnol','9 mois','Formation en langues anglaise et espagnole.'],
-  ['Onglerie, Cosmétologie, Make-up','3 à 6 mois','Formation en beauté, onglerie, cosmétologie et maquillage.'],
-  ['Décoration événementielle, Résine','3 à 6 mois','Formation en décoration événementielle et techniques de résine.'],
-  ['Carrelage, Plomberie, Électricité','4 à 6 mois','Parcours pratique dans les métiers du bâtiment.'],
+  ['Vidéographie','4 mois','Formation pratique en prise de vue, cadrage et réalisation vidéo.'],
+  ['Photographie','4 mois','Formation pratique en prise de vue, lumière et composition photographique.'],
+  ['Anglais','9 mois','Formation indépendante en langue anglaise.'],
+  ['Espagnol','9 mois','Formation indépendante en langue espagnole.'],
+  ['Onglerie','3 à 6 mois','Formation pratique en soins et techniques professionnelles des ongles.'],
+  ['Cosmétologie','3 à 6 mois','Formation indépendante en cosmétologie et soins esthétiques.'],
+  ['Make-up','3 à 6 mois','Formation indépendante en maquillage professionnel.'],
+  ['Décoration événementielle','3 à 6 mois','Formation indépendante en décoration événementielle.'],
+  ['Résine','3 à 6 mois','Formation indépendante aux techniques professionnelles de résine.'],
+  ['Carrelage','4 à 6 mois','Formation pratique en pose et finition de carrelage.'],
   ['Informatique bureautique','1 an','Formation en informatique et outils bureautiques.'],
   ['Dread Locks','2 mois','Formation pratique en dread locks et coiffure spécialisée.']
 ];
@@ -255,6 +259,19 @@ for(const [name,duration,description] of basePrograms){
     insertProgram.run(name,duration,description,0);
   }
 }
+// Séparation du catalogue : les anciens parcours regroupés sont conservés pour
+// l'historique, mais désactivés dans les nouveaux formulaires. Aucune inscription,
+// note, facture, paiement, module ou certificat historique n'est déplacé ni supprimé.
+const legacyCombinedPrograms=[
+  'Anglais, Espagnol',
+  'Vidéographie et Photographie',
+  'Onglerie, Cosmétologie, Make-up',
+  'Décoration événementielle, Résine',
+  'Carrelage, Plomberie, Électricité',
+  'Secourisme et Aide-soignant'
+];
+const deactivateLegacyProgram=db.prepare('UPDATE programs SET active=0 WHERE name=?');
+for(const legacyName of legacyCombinedPrograms) deactivateLegacyProgram.run(legacyName);
 // Migration unique: l'ancienne version indiquait 6 mois pour l'informatique bureautique.
 // On corrige une seule fois les anciennes installations, puis l'administrateur reste libre
 // de modifier cette durée depuis le bouton Modifier dans Formations.
