@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.4.7-catalogue-after-neon-restore';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.0-direction-limitee';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -189,6 +189,18 @@ db.exec(`CREATE TABLE IF NOT EXISTS secretariat_audit(
  action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, details TEXT,
  created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );`);
+db.exec(`CREATE TABLE IF NOT EXISTS direction_recommendations(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, director_id INTEGER NOT NULL, director_email TEXT NOT NULL,
+ director_role TEXT NOT NULL CHECK(director_role IN ('direction_general','direction_studies')),
+ subject TEXT NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'À examiner',
+ admin_note TEXT, reviewed_by INTEGER, reviewed_by_email TEXT, reviewed_at TEXT,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS direction_audit(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id INTEGER NOT NULL, actor_email TEXT NOT NULL,
+ actor_role TEXT NOT NULL, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);`);
+
 
 ensureColumn('programs','monthly_fee_htg','REAL DEFAULT 0');
 ensureColumn('programs','program_group','TEXT');
@@ -454,7 +466,7 @@ function auth(req,res,next){
     req.user=jwt.verify(t,SECRET);
     // Recheck privileged accounts against the database on every request so a
     // disabled secretary/admin loses access immediately, even with an old JWT.
-    if(['admin','secretary'].includes(req.user.role)){
+    if(['admin','secretary','direction_general','direction_studies'].includes(req.user.role)){
       const account=db.prepare('SELECT role,active FROM admins WHERE id=? AND lower(email)=lower(?)').get(Number(req.user.id),String(req.user.email||''));
       if(!account||account.role!==req.user.role||Number(account.active)!==1){
         res.clearCookie('cetep_token');
@@ -551,7 +563,7 @@ app.get('/health',async(req,res)=>{
   res.status(status.ok?200:503).json(status);
 });
 function sendPage(res,file){const pub=path.join(__dirname,'public',file);const root=path.join(__dirname,file);if(fs.existsSync(pub))return res.sendFile(pub);if(fs.existsSync(root))return res.sendFile(root);return res.status(404).send('Page introuvable: '+file);}
-app.get('/api/version',(req,res)=>{const modelPath=path.join(__dirname,'public',CERTIFICATE_MODEL_FILE);res.json({version:APP_VERSION,certificate_model:CERTIFICATE_MODEL_FILE,certificate_model_version:APP_VERSION,certificate_model_exists:fs.existsSync(modelPath),homepage_promotions:true});});app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public',CERTIFICATE_MODEL_FILE);if(!fs.existsSync(model))return res.status(404).send('Modèle officiel CETEP introuvable dans public/.');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':APP_VERSION});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/secretariat',(req,res)=>sendPage(res,'secretary.html'));app.get('/secretary',(req,res)=>res.redirect('/secretariat'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
+app.get('/api/version',(req,res)=>{const modelPath=path.join(__dirname,'public',CERTIFICATE_MODEL_FILE);res.json({version:APP_VERSION,certificate_model:CERTIFICATE_MODEL_FILE,certificate_model_version:APP_VERSION,certificate_model_exists:fs.existsSync(modelPath),homepage_promotions:true});});app.get('/certificat-modele-2026.png',(req,res)=>{const model=path.join(__dirname,'public',CERTIFICATE_MODEL_FILE);if(!fs.existsSync(model))return res.status(404).send('Modèle officiel CETEP introuvable dans public/.');res.set({'Content-Type':'image/png','Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','X-CETEP-Certificate-Model':APP_VERSION});res.sendFile(model);});app.get('/',(req,res)=>{res.set('Cache-Control','no-store');sendPage(res,'index.html');});app.get('/informations',(req,res)=>sendPage(res,'informations.html'));app.get('/login',(req,res)=>sendPage(res,'login.html'));app.get('/admin',(req,res)=>sendPage(res,'admin.html'));app.get('/direction',(req,res)=>sendPage(res,'direction.html'));app.get('/secretariat',(req,res)=>sendPage(res,'secretary.html'));app.get('/secretary',(req,res)=>res.redirect('/secretariat'));app.get('/local',(req,res)=>sendPage(res,'local.html'));app.get('/administration',(req,res)=>res.redirect('/admin'));app.get('/teacher',(req,res)=>sendPage(res,'teacher.html'));app.get('/professeur',(req,res)=>res.redirect('/teacher'));app.get('/student',(req,res)=>sendPage(res,'student.html'));app.get('/etudiant',(req,res)=>res.redirect('/student'));app.get('/undefined',(req,res)=>res.redirect('/'));
 function adminLogin(req,res){const a=db.prepare('SELECT * FROM admins WHERE email=?').get((req.body.email||'').trim().toLowerCase());if(!a||a.role!=='admin'||Number(a.active)!==1||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'admin'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/admin'});}
 function secretaryLogin(req,res){const a=db.prepare("SELECT * FROM admins WHERE email=? AND role='secretary' AND active=1").get((req.body.email||'').trim().toLowerCase());if(!a||!bcrypt.compareSync(req.body.password||'',a.password_hash))return res.status(401).json({error:'Identifiants secrétariat invalides'});res.cookie('cetep_token',sign({id:a.id,email:a.email,role:'secretary'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/secretariat'});}
 app.post('/api/secretary/login',secretaryLogin);
@@ -560,6 +572,67 @@ function teacherLogin(req,res){const t=db.prepare('SELECT * FROM teachers WHERE 
 app.post('/api/teacher/login',teacherLogin);app.post('/api/login/teacher',teacherLogin);
 function studentLogin(req,res){const s=db.prepare('SELECT * FROM students WHERE student_no=?').get((req.body.code||req.body.student_no||'').trim().toUpperCase());if(!s||Number(s.access_enabled)!==1||!s.password_hash||!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND access_enabled=1 AND status='Actif' LIMIT 1").get(s.id)||!bcrypt.compareSync(req.body.password||'',s.password_hash))return res.status(401).json({error:'Code étudiant, mot de passe ou accès invalide'});res.cookie('cetep_token',sign({id:s.id,student_no:s.student_no,role:'student'}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});res.json({ok:true,redirect:'/student'});}
 app.post('/api/student/login',studentLogin);app.post('/api/login/student',studentLogin);
+
+// Direction accounts: created and managed only by the principal administrator.
+app.post('/api/direction/login',(req,res)=>{
+ const email=String(req.body.email||'').trim().toLowerCase(), password=String(req.body.password||'');
+ const a=db.prepare("SELECT * FROM admins WHERE lower(email)=? AND role IN ('direction_general','direction_studies') AND active=1").get(email);
+ if(!a||!bcrypt.compareSync(password,a.password_hash))return res.status(401).json({error:'Identifiants Direction invalides.'});
+ const roleName=a.role;db.prepare('INSERT INTO direction_audit(actor_id,actor_email,actor_role,action,details) VALUES(?,?,?,?,?)').run(a.id,a.email,roleName,'LOGIN',JSON.stringify({}));
+ res.cookie('cetep_token',sign({id:a.id,email:a.email,role:roleName}),{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:43200000});
+ res.json({ok:true,redirect:'/direction'});
+});
+app.get('/api/admin/direction-accounts',auth,role('admin'),(req,res)=>res.json(db.prepare("SELECT id,email,role,active,created_at FROM admins WHERE role IN ('direction_general','direction_studies') ORDER BY role,id").all()));
+app.post('/api/admin/direction-accounts',auth,role('admin'),(req,res)=>{
+ const roleName=String(req.body.role||''), email=String(req.body.email||'').trim().toLowerCase(), password=String(req.body.password||'');
+ if(!['direction_general','direction_studies'].includes(roleName))return res.status(400).json({error:'Rôle Direction invalide.'});
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return res.status(400).json({error:'Adresse email invalide.'});
+ if(password.length<12)return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});
+ try{const r=db.prepare('INSERT INTO admins(email,password_hash,role,active) VALUES(?,?,?,1)').run(email,bcrypt.hashSync(password,12),roleName);
+ db.prepare('INSERT INTO direction_audit(actor_id,actor_email,actor_role,action,details) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,'admin','CREATE_ACCOUNT',JSON.stringify({account_id:r.lastInsertRowid,email,role:roleName}));
+ res.status(201).json({ok:true,id:r.lastInsertRowid,email,role:roleName});}catch(e){res.status(409).json({error:'Cet email est déjà utilisé.'});}
+});
+app.patch('/api/admin/direction-accounts/:id',auth,role('admin'),(req,res)=>{
+ const id=Number(req.params.id), account=db.prepare("SELECT id,email,role,active FROM admins WHERE id=? AND role IN ('direction_general','direction_studies')").get(id);
+ if(!account)return res.status(404).json({error:'Compte Direction introuvable.'});
+ const active=req.body.active, password=req.body.password;
+ if(active!==undefined && ![true,false,0,1].includes(active))return res.status(400).json({error:'Statut invalide.'});
+ if(password!==undefined && (typeof password!=='string'||password.length<12))return res.status(400).json({error:'Le mot de passe doit contenir au moins 12 caractères.'});
+ if(active!==undefined)db.prepare('UPDATE admins SET active=? WHERE id=?').run(active?1:0,id);
+ if(password!==undefined)db.prepare('UPDATE admins SET password_hash=? WHERE id=?').run(bcrypt.hashSync(password,12),id);
+ db.prepare('INSERT INTO direction_audit(actor_id,actor_email,actor_role,action,details) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,'admin','UPDATE_ACCOUNT',JSON.stringify({account_id:id,active:active===undefined?null:!!active,password_reset:password!==undefined}));
+ res.json({ok:true});
+});
+app.get('/api/direction/overview',auth,role('direction_general','direction_studies'),(req,res)=>{
+ const common={students:db.prepare('SELECT COUNT(*) c FROM students').get().c,active_students:db.prepare("SELECT COUNT(DISTINCT student_id) c FROM enrollments WHERE status='Actif'").get().c,programs:db.prepare('SELECT COUNT(*) c FROM programs WHERE active=1').get().c};
+ let data={role:req.user.role,common};
+ if(req.user.role==='direction_general'){
+  data.finance={confirmed_payments:db.prepare("SELECT COALESCE(SUM(amount_htg),0) total FROM payments WHERE status='Confirmé'").get().total,confirmed_donations:db.prepare("SELECT COALESCE(SUM(amount),0) total FROM donations WHERE status!='Refusé'").get().total,expenses:db.prepare("SELECT COALESCE(SUM(amount_htg),0) total FROM expenses WHERE status IS NULL OR status!='Annulé'").get().total};
+  data.teachers=db.prepare('SELECT COUNT(*) c FROM teachers WHERE active=1').get().c;
+ }else{
+  data.academic={teachers:db.prepare('SELECT COUNT(*) c FROM teachers WHERE active=1').get().c,pending_enrollments:db.prepare("SELECT COUNT(*) c FROM enrollments WHERE status='En attente'").get().c,grade_records:db.prepare('SELECT COUNT(*) c FROM academic_grades').get().c,programs:db.prepare('SELECT id,name,duration,program_group FROM programs WHERE active=1 ORDER BY program_group,name').all()};
+ }
+ db.prepare('INSERT INTO direction_audit(actor_id,actor_email,actor_role,action,details) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,req.user.role,'VIEW_OVERVIEW','{}');
+ res.json(data);
+});
+app.get('/api/direction/recommendations',auth,role('direction_general','direction_studies'),(req,res)=>res.json(db.prepare('SELECT id,subject,message,status,admin_note,created_at,reviewed_at FROM direction_recommendations WHERE director_id=? ORDER BY id DESC LIMIT 100').all(req.user.id)));
+app.post('/api/direction/recommendations',auth,role('direction_general','direction_studies'),(req,res)=>{
+ const subject=String(req.body.subject||'').trim().slice(0,160), message=String(req.body.message||'').trim().slice(0,5000);
+ if(subject.length<3||message.length<10)return res.status(400).json({error:'Saisissez un sujet et un message (10 caractères minimum).'});
+ const r=db.prepare('INSERT INTO direction_recommendations(director_id,director_email,director_role,subject,message) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,req.user.role,subject,message);
+ db.prepare('INSERT INTO direction_audit(actor_id,actor_email,actor_role,action,details) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,req.user.role,'SUBMIT_RECOMMENDATION',JSON.stringify({recommendation_id:r.lastInsertRowid}));
+ res.status(201).json({ok:true,id:r.lastInsertRowid});
+});
+app.get('/api/admin/direction-recommendations',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM direction_recommendations ORDER BY id DESC LIMIT 300').all()));
+app.patch('/api/admin/direction-recommendations/:id',auth,role('admin'),(req,res)=>{
+ const id=Number(req.params.id), status=String(req.body.status||'À examiner'), note=String(req.body.admin_note||'').slice(0,2000);
+ if(!['À examiner','Acceptée','Refusée','Traitée'].includes(status))return res.status(400).json({error:'Statut invalide.'});
+ const r=db.prepare('UPDATE direction_recommendations SET status=?,admin_note=?,reviewed_by=?,reviewed_by_email=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?').run(status,note,req.user.id,req.user.email,id);
+ if(!r.changes)return res.status(404).json({error:'Recommandation introuvable.'});
+ db.prepare('INSERT INTO direction_audit(actor_id,actor_email,actor_role,action,details) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,'admin','REVIEW_RECOMMENDATION',JSON.stringify({recommendation_id:id,status}));res.json({ok:true});
+});
+app.get('/api/admin/direction-audit',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM direction_audit ORDER BY id DESC LIMIT 300').all()));
+
 app.post('/api/logout',(req,res)=>{res.clearCookie('cetep_token');res.json({ok:true});});app.get('/api/session',auth,(req,res)=>res.json({user:req.user}));
 // Supervised secretary accounts: only the principal administrator can create/manage them.
 app.get('/api/admin/secretaries',auth,role('admin'),(req,res)=>res.json(db.prepare("SELECT id,email,active,created_at FROM admins WHERE role='secretary' ORDER BY id DESC").all()));
