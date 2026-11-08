@@ -109,7 +109,7 @@ async function loadDirectionAccounts(){
   try{
     const rows=await api('/api/admin/direction-accounts');
     accountsBox.innerHTML=rows.length
-      ? '<table class="table"><tr><th>Fonction</th><th>Email</th><th>Statut</th><th>Actions</th></tr>'+rows.map(x=>'<tr><td>'+(x.role==='direction_general'?'Directeur Général':'Directeur des Études')+'</td><td>'+esc(x.email)+'</td><td>'+(Number(x.active)?'🟢 Actif':'🔒 Désactivé')+'</td><td><button class="btn secondary" onclick="toggleDirection('+Number(x.id)+','+(!Number(x.active))+')">'+(Number(x.active)?'Désactiver':'Activer')+'</button> <button class="btn" onclick="resetDirectionPassword('+Number(x.id)+')">Changer mot de passe</button></td></tr>').join('')+'</table>'
+      ? '<table class="table"><tr><th>Fonction</th><th>Email</th><th>Statut</th><th>Actions</th></tr>'+rows.map(x=>'<tr><td>'+(x.role==='direction_general'?'Directeur Général':'Directeur des Études')+'</td><td>'+esc(x.email)+'</td><td>'+(Number(x.active)?'🟢 Actif':'🔒 Désactivé')+'</td><td><button class="btn" onclick="replaceDirection('+Number(x.id)+',\''+x.role+'\')">✏️ Modifier / remplacer le directeur</button> <button class="btn secondary" onclick="toggleDirection('+Number(x.id)+','+(!Number(x.active))+')">'+(Number(x.active)?'Désactiver':'Activer')+'</button> <button class="btn" onclick="resetDirectionPassword('+Number(x.id)+')">Changer mot de passe</button></td></tr>').join('')+'</table>'
       : '<p>Aucun compte Direction créé.</p>';
   }catch(e){accountsBox.textContent='Impossible de charger les comptes : '+e.message;}
   // Ces deux historiques sont facultatifs : leur indisponibilité ne doit jamais masquer le formulaire ni les comptes.
@@ -127,6 +127,29 @@ async function loadDirectionAccounts(){
   }catch(e){$('#directionAuditTable').textContent='Journal des activités indisponible pour le moment.';}
 }
 const directionCreateForm=$('#directionCreateForm');if(directionCreateForm)directionCreateForm.onsubmit=async e=>{e.preventDefault();try{const b=fo(e.target);if(b.password.length<12)return alert('12 caractères minimum.');await api('/api/admin/direction-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});e.target.reset();await loadDirectionAccounts();alert('Compte Direction créé. Transmettez les identifiants en privé.')}catch(err){alert(err.message)}};
+async function replaceDirection(id,roleName){
+  const label=roleName==='direction_general'?'Directeur Général':'Directeur des Études';
+  const email=prompt('Remplacement du titulaire — '+label+'\nNouvelle adresse email :');
+  if(email===null)return;
+  const cleanEmail=email.trim().toLowerCase();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail))return alert('Adresse email invalide.');
+  const password=prompt('Mot de passe initial du nouveau titulaire (12 caractères minimum) :');
+  if(password===null)return;
+  if(password.length<12)return alert('Le mot de passe doit contenir au moins 12 caractères.');
+  if(!confirm('Créer le nouvel accès '+label+' puis désactiver l’ancien compte ?'))return;
+  let created=null;
+  try{
+    created=await api('/api/admin/direction-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:roleName,email:cleanEmail,password})});
+    try{
+      await api('/api/admin/direction-accounts/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:false})});
+    }catch(disableError){
+      try{await api('/api/admin/direction-accounts/'+created.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:false})});}catch(rollbackError){console.error('Rollback nouveau compte Direction impossible',rollbackError);}
+      throw Error('Le nouveau compte a été créé, mais l’ancien n’a pas pu être désactivé. Vérifiez les deux comptes dans la liste. '+disableError.message);
+    }
+    await loadDirectionAccounts();
+    alert('Le nouveau titulaire dispose maintenant du compte. L’ancien compte a été désactivé. Transmettez le mot de passe au nouveau responsable de manière privée.');
+  }catch(e){alert(e.message)}
+}
 async function toggleDirection(id,active){if(!confirm((active?'Activer':'Désactiver')+' ce compte Direction ?'))return;try{await api('/api/admin/direction-accounts/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active})});loadDirectionAccounts()}catch(e){alert(e.message)}}
 async function resetDirectionPassword(id){const password=prompt('Nouveau mot de passe (12 caractères minimum) :');if(password===null)return;if(password.length<12)return alert('12 caractères minimum.');try{await api('/api/admin/direction-accounts/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});alert('Mot de passe modifié.');}catch(e){alert(e.message)}}
 async function reviewDirection(id,status){try{await api('/api/admin/direction-recommendations/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});await loadDirectionAccounts()}catch(e){alert(e.message)}}
