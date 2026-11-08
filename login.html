@@ -1,1 +1,98 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CETEP — Connexion</title><link rel="stylesheet" href="/style.css"></head><body><main class="container" style="max-width:500px;padding-top:80px"><div class="card"><h1>CETEP — Connexion</h1><div class="row"><button class="btn" onclick="show('admin')">Administration</button><button class="btn" onclick="show('teacher')">Professeur</button><button class="btn" onclick="show('student')">Étudiant</button></div><form id="admin" style="margin-top:20px"><input class="input" name="email" type="email" placeholder="Email administrateur" required><input class="input" name="password" type="password" placeholder="Mot de passe" required><button class="btn">Se connecter</button></form><form id="teacher" class="hidden" style="margin-top:20px"><input class="input" name="email" type="email" placeholder="Email professeur" required><input class="input" name="password" type="password" placeholder="Mot de passe" required><button class="btn">Espace professeur</button></form><form id="student" class="hidden" style="margin-top:20px"><input class="input" name="code" placeholder="Code CETEP-..." required><input class="input" name="password" type="password" placeholder="Mot de passe" required><button class="btn">Espace étudiant</button></form><p id="msg"></p><a href="/">← Retour au site</a></div></main><script>const $=s=>document.querySelector(s);function show(x){['admin','teacher','student'].forEach(id=>$('#'+id).classList.toggle('hidden',id!==x));$('#msg').textContent=''}async function go(e,u){e.preventDefault();const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});const j=await r.json();if(r.ok)location.href=j.redirect;else $('#msg').textContent=j.error||'Erreur'}$('#admin').onsubmit=e=>go(e,'/api/login');$('#teacher').onsubmit=e=>go(e,'/api/teacher/login');$('#student').onsubmit=e=>go(e,'/api/student/login');</script></body></html>
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CETEP — Connexion</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.role-buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:18px 0}
+.role-buttons .btn{width:100%;min-height:48px}
+.login-form{margin-top:20px}
+.login-form .input{width:100%;box-sizing:border-box;margin:8px 0}
+.hidden{display:none!important}
+.help{font-size:.92rem;color:#526174;margin:8px 0 14px}
+@media(max-width:560px){.role-buttons{grid-template-columns:1fr 1fr}.role-buttons .btn{font-size:.9rem;padding:10px 6px}}
+</style>
+</head>
+<body>
+<main class="container" style="max-width:620px;padding-top:60px">
+<div class="card">
+<h1>CETEP — Connexion</h1>
+
+<div class="role-buttons">
+<button type="button" class="btn" onclick="show('admin')">Administration</button>
+<button type="button" class="btn" onclick="show('direction')">Direction</button>
+<button type="button" class="btn" onclick="show('teacher')">Professeur</button>
+<button type="button" class="btn" onclick="show('student')">Étudiant</button>
+</div>
+
+<form id="admin" class="login-form">
+<input class="input" name="email" type="email" placeholder="Email administrateur" autocomplete="username" required>
+<input class="input" name="password" type="password" placeholder="Mot de passe" autocomplete="current-password" required>
+<button class="btn" type="submit">Se connecter</button>
+</form>
+
+<form id="direction" class="login-form hidden">
+<p class="help"><strong>Accès Direction CETEP</strong><br>
+Directeur Général : Agronome Livenson Fleuriot<br>
+Directeur des Études : Wilio Joseph<br>
+Utilisez l'adresse email et le mot de passe attribués par l'administrateur.</p>
+<input class="input" name="email" type="email" placeholder="Email Direction" autocomplete="username" required>
+<input class="input" name="password" type="password" placeholder="Mot de passe" autocomplete="current-password" required>
+<button class="btn" type="submit">Accéder à l'espace Direction</button>
+</form>
+
+<form id="teacher" class="login-form hidden">
+<input class="input" name="email" type="email" placeholder="Email professeur" autocomplete="username" required>
+<input class="input" name="password" type="password" placeholder="Mot de passe" autocomplete="current-password" required>
+<button class="btn" type="submit">Espace professeur</button>
+</form>
+
+<form id="student" class="login-form hidden">
+<input class="input" name="code" placeholder="Code CETEP-..." autocomplete="username" required>
+<input class="input" name="password" type="password" placeholder="Mot de passe" autocomplete="current-password" required>
+<button class="btn" type="submit">Espace étudiant</button>
+</form>
+
+<p id="msg" role="alert" aria-live="polite"></p>
+<a href="/">← Retour au site</a>
+</div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+function show(x) {
+  ['admin','direction','teacher','student'].forEach(id => {
+    $('#'+id).classList.toggle('hidden', id !== x);
+  });
+  $('#msg').textContent = '';
+}
+async function go(e, url) {
+  e.preventDefault();
+  $('#msg').textContent = 'Connexion en cours…';
+  const form = e.currentTarget;
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify(Object.fromEntries(new FormData(form)))
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.redirect) {
+      location.href = j.redirect;
+    } else {
+      $('#msg').textContent = j.error || 'Identifiants invalides ou accès non autorisé.';
+    }
+  } catch (err) {
+    $('#msg').textContent = 'Impossible de contacter le serveur. Réessayez.';
+  }
+}
+$('#admin').addEventListener('submit', e => go(e, '/api/login'));
+$('#direction').addEventListener('submit', e => go(e, '/api/direction/login'));
+$('#teacher').addEventListener('submit', e => go(e, '/api/teacher/login'));
+$('#student').addEventListener('submit', e => go(e, '/api/student/login'));
+</script>
+</body>
+</html>
