@@ -1330,7 +1330,11 @@ async function restoreNeonSnapshot(snapshot){
     'student_document_audit',
     'student_notifications',
     'communication_audit',
-    'role_permissions'
+    'role_permissions',
+    // Added in v15.5: older Neon snapshots predate the Direction module.
+    // Preserve the locally initialized rows when these additive tables are absent.
+    'direction_audit',
+    'direction_recommendations'
   ];
 
   for (const name of backwardCompatibleTables) {
