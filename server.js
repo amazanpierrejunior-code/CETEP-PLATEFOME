@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.0-direction-limitee';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.1-direction-comptabilite';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -200,6 +200,38 @@ CREATE TABLE IF NOT EXISTS direction_audit(
  id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id INTEGER NOT NULL, actor_email TEXT NOT NULL,
  actor_role TEXT NOT NULL, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );`);
+
+// Additive v15.5.1 migration: accounting tables required by the Expenses
+// module and the Direction General financial overview. Existing rows are preserved.
+db.exec(`CREATE TABLE IF NOT EXISTS expenses(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ expense_date TEXT NOT NULL,
+ category TEXT NOT NULL,
+ amount_htg REAL NOT NULL CHECK(amount_htg > 0),
+ method TEXT NOT NULL,
+ payee TEXT NOT NULL,
+ reference TEXT,
+ description TEXT NOT NULL,
+ receipt TEXT,
+ status TEXT NOT NULL DEFAULT 'Confirmé',
+ created_by INTEGER,
+ created_by_email TEXT,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
+CREATE TABLE IF NOT EXISTS expense_audit(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ actor_id INTEGER,
+ actor_email TEXT NOT NULL,
+ action TEXT NOT NULL,
+ expense_id INTEGER,
+ details TEXT,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_expense_audit_created ON expense_audit(created_at);`);
+
 
 
 ensureColumn('programs','monthly_fee_htg','REAL DEFAULT 0');
@@ -632,6 +664,62 @@ app.patch('/api/admin/direction-recommendations/:id',auth,role('admin'),(req,res
  db.prepare('INSERT INTO direction_audit(actor_id,actor_email,actor_role,action,details) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,'admin','REVIEW_RECOMMENDATION',JSON.stringify({recommendation_id:id,status}));res.json({ok:true});
 });
 app.get('/api/admin/direction-audit',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM direction_audit ORDER BY id DESC LIMIT 300').all()));
+
+// CETEP accounting: expenses are admin-managed, audited, and never hard-deleted.
+const CETEP_EXPENSE_CATEGORIES=['Salè ak pèsonèl','Lwaye ak lokal','Kouran ak entènèt','Materyèl pedagojik','Ekipman ak mèb','Transpò ak deplasman','Aktivite ak gradyasyon','Piblisite ak kominikasyon','Bous ak sipò elèv','Antretyen ak reparasyon','Depans administratif','Lòt depans'];
+function expenseAudit(req,action,id,details){
+ db.prepare('INSERT INTO expense_audit(actor_id,actor_email,action,expense_id,details) VALUES(?,?,?,?,?)')
+  .run(req.user?.id||null,req.user?.email||'admin',action,id||null,JSON.stringify(details||{}));
+}
+app.get('/api/admin/expenses',auth,role('admin'),(req,res)=>{
+ const from=String(req.query.from||''),to=String(req.query.to||''),category=String(req.query.category||'');
+ const clauses=[],params=[];
+ if(from){clauses.push('expense_date>=?');params.push(from);}
+ if(to){clauses.push('expense_date<=?');params.push(to);}
+ if(category){clauses.push('category=?');params.push(category);}
+ const where=clauses.length?' WHERE '+clauses.join(' AND '):'';
+ const expenses=db.prepare('SELECT * FROM expenses'+where+' ORDER BY expense_date DESC,id DESC').all(...params);
+ const active="(status IS NULL OR status!='Annulé')";
+ const revenue=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) total FROM payments WHERE status='Confirmé'").get().total||0)+Number(db.prepare("SELECT COALESCE(SUM(amount),0) total FROM donations WHERE status NOT IN ('Refusé','Annulé')").get().total||0);
+ const totalExpenses=Number(db.prepare(`SELECT COALESCE(SUM(amount_htg),0) total FROM expenses WHERE ${active}`).get().total||0);
+ const periodExpenses=Number(db.prepare(`SELECT COALESCE(SUM(amount_htg),0) total FROM expenses${where?where+' AND ': ' WHERE '} ${active}`).get(...params).total||0);
+ const periodRevenue=Number(db.prepare("SELECT COALESCE(SUM(amount_htg),0) total FROM payments WHERE status='Confirmé' AND date(created_at) BETWEEN COALESCE(NULLIF(? ,''),date('now','-100 years')) AND COALESCE(NULLIF(? ,''),date('now','+100 years'))").get(from,to).total||0)
+  +Number(db.prepare("SELECT COALESCE(SUM(amount),0) total FROM donations WHERE status NOT IN ('Refusé','Annulé') AND date(created_at) BETWEEN COALESCE(NULLIF(? ,''),date('now','-100 years')) AND COALESCE(NULLIF(? ,''),date('now','+100 years'))").get(from,to).total||0);
+ const byCategory=db.prepare("SELECT category,COALESCE(SUM(amount_htg),0) total FROM expenses WHERE (status IS NULL OR status!='Annulé')"+(from?' AND expense_date>=?':'')+(to?' AND expense_date<=?':'')+(category?' AND category=?':'')+" GROUP BY category ORDER BY total DESC").all(...[...(from?[from]:[]),...(to?[to]:[]),...(category?[category]:[])]);
+ const audit=db.prepare('SELECT * FROM expense_audit ORDER BY id DESC LIMIT 300').all();
+ res.json({categories:CETEP_EXPENSE_CATEGORIES,expenses,byCategory,audit,summary:{revenue,expenses:totalExpenses,balance:revenue-totalExpenses,count:db.prepare(`SELECT COUNT(*) c FROM expenses WHERE ${active}`).get().c,period_revenue:periodRevenue,period_expenses:periodExpenses}});
+});
+app.post('/api/admin/expenses',auth,role('admin'),(req,res)=>{
+ const b=req.body||{},expenseDate=String(b.expense_date||''),category=String(b.category||''),method=String(b.method||''),payee=String(b.payee||'').trim(),description=String(b.description||'').trim(),amount=Number(b.amount_htg);
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)||!CETEP_EXPENSE_CATEGORIES.includes(category)||!Number.isFinite(amount)||amount<=0||!method||!payee||!description)
+  return res.status(400).json({error:'Dat, kategori, montan, mòd, benefisyè ak deskripsyon obligatwa.'});
+ const receipt=String(b.receipt||'');
+ if(receipt && (!/^data:image\/(png|jpeg|webp);base64,/.test(receipt)||receipt.length>7*1024*1024))
+  return res.status(400).json({error:'Resi a dwe yon imaj PNG/JPEG/WebP ki pa depase 5 Mo.'});
+ const r=db.prepare("INSERT INTO expenses(expense_date,category,amount_htg,method,payee,reference,description,receipt,status,created_by,created_by_email) VALUES(?,?,?,?,?,?,?,?, 'Confirmé',?,?)")
+  .run(expenseDate,category,amount,method,payee,String(b.reference||'').trim(),description,receipt||null,req.user.id,req.user.email);
+ expenseAudit(req,'CREATE',r.lastInsertRowid,{expense_date:expenseDate,category,amount_htg:amount,payee});
+ res.status(201).json({ok:true,id:r.lastInsertRowid});
+});
+app.put('/api/admin/expenses/:id',auth,role('admin'),(req,res)=>{
+ const id=Number(req.params.id),b=req.body||{},old=db.prepare('SELECT * FROM expenses WHERE id=?').get(id);
+ if(!old)return res.status(404).json({error:'Depans sa a pa egziste.'});
+ if(old.status==='Annulé')return res.status(409).json({error:'Yon depans ki anile pa ka modifye.'});
+ const amount=Number(b.amount_htg),description=String(b.description||'').trim(),payee=String(b.payee||'').trim();
+ if(!Number.isFinite(amount)||amount<=0||!description||!payee)return res.status(400).json({error:'Montan, deskripsyon ak benefisyè obligatwa.'});
+ db.prepare('UPDATE expenses SET amount_htg=?,description=?,payee=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(amount,description,payee,id);
+ expenseAudit(req,'UPDATE',id,{before:{amount_htg:old.amount_htg,description:old.description,payee:old.payee},after:{amount_htg:amount,description,payee}});
+ res.json({ok:true});
+});
+app.post('/api/admin/expenses/:id/void',auth,role('admin'),(req,res)=>{
+ const id=Number(req.params.id),old=db.prepare('SELECT id,status FROM expenses WHERE id=?').get(id);
+ if(!old)return res.status(404).json({error:'Depans sa a pa egziste.'});
+ if(old.status==='Annulé')return res.json({ok:true,already_void:true});
+ db.prepare("UPDATE expenses SET status='Annulé',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
+ expenseAudit(req,'VOID',id,{previous_status:old.status});
+ res.json({ok:true});
+});
+
 
 app.post('/api/logout',(req,res)=>{res.clearCookie('cetep_token');res.json({ok:true});});app.get('/api/session',auth,(req,res)=>res.json({user:req.user}));
 // Supervised secretary accounts: only the principal administrator can create/manage them.
@@ -1334,7 +1422,9 @@ async function restoreNeonSnapshot(snapshot){
     // Added in v15.5: older Neon snapshots predate the Direction module.
     // Preserve the locally initialized rows when these additive tables are absent.
     'direction_audit',
-    'direction_recommendations'
+    'direction_recommendations',
+    'expenses',
+    'expense_audit'
   ];
 
   for (const name of backwardCompatibleTables) {
