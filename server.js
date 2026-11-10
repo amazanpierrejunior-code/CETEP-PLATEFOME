@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.1-direction-comptabilite';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.2-casas-levels-direction-comptabilite';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -412,6 +412,75 @@ function applyCatalogMigrations(){
   console.log('[CETEP CATALOGUE] Migration v15.4.6 appliquée après restauration Neon:',result);
   return result;
 }
+
+// v15.5.2 — Cours original CETEP de préparation à l'anglais/CASAS.
+// Cette migration est additive et idempotente: elle ne touche jamais aux dossiers historiques.
+function applyCasasCourseMigration(){
+  const key='cetep_casas_levels_v1552';
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
+  const tx=db.transaction(()=>{
+    // Force le retrait des anciens choix groupés dans le catalogue actif; les lignes
+    // historiques restent en base pour préserver inscriptions, paiements et certificats.
+    const oldChoices=['Anglais, Espagnol','Décoration événementielle, Résine','Carrelage, Plomberie, Électricité','Onglerie, Cosmétologie, Make-up','Secourisme et Aide-soignant','Vidéographie','Photographie'];
+    const deactivate=db.prepare('UPDATE programs SET active=0 WHERE name=?');
+    for(const oldName of oldChoices) deactivate.run(oldName);
+    db.prepare("UPDATE programs SET active=1 WHERE lower(trim(name))=lower(trim('Vidéographie et Photographie'))").run();
+    let program=db.prepare("SELECT id FROM programs WHERE lower(trim(name))=lower(trim(?)) ORDER BY active DESC,id LIMIT 1").get('English & CASAS Preparation — CETEP');
+    if(!program){
+      const r=db.prepare("INSERT INTO programs(name,duration,description,price_htg,monthly_fee_htg,program_group,fee_period,active) VALUES(?,?,?,?,?,?,?,1)")
+        .run('English & CASAS Preparation — CETEP','Par niveaux A à F','Cours original de langue anglaise et préparation aux évaluations de compréhension orale et écrite. Matériel pédagogique conçu par CETEP.',0,0,'Langues','Mensualité');
+      program={id:r.lastInsertRowid};
+    } else db.prepare('UPDATE programs SET active=1,program_group=? WHERE id=?').run('Langues',program.id);
+    const levels=[
+      ['Level A — Beginner','Salutations, alphabet, nombres, présentations et consignes simples.',[
+        ['A1 — Greetings and introductions','OBJECTIF: saluer et se présenter.\nVOCABULARY: hello = bonjour; good morning = bonjour (matin); goodbye = au revoir; name = nom; please = s’il vous plaît; thank you = merci.\nDIALOGUE ORIGINAL:\nA: Hello! What is your name?\nB: My name is Ana.\nA: Nice to meet you.\nB: Nice to meet you, too.\nPRATIQUE: 1) How do you greet someone in the morning? 2) What question asks for a person’s name?\nRÉPONSES: 1) Good morning. 2) What is your name?'],
+        ['A2 — Numbers, dates and personal information','OBJECTIF: comprendre des informations personnelles simples.\nVOCABULARY: age, phone number, address, day, month, today.\nEXEMPLE: My phone number is 555-0142. My birthday is May 12.\nPRATIQUE: Écrivez en anglais votre âge, votre numéro de téléphone fictif et la date du jour.\nCOMPRÉHENSION: “The appointment is on Friday at nine.” Quand est le rendez-vous? RÉPONSE: Friday at nine.'],
+        ['A3 — Everyday instructions','OBJECTIF: comprendre des consignes courtes.\nEXPRESSIONS: Open the book; listen carefully; choose an answer; write your name; wait here.\nMISE EN SITUATION: A teacher says, “Please open your book and write your name.” Que devez-vous faire?\nRÉPONSE: Ouvrir le livre et écrire son nom.']
+      ]],
+      ['Level B — Elementary','Routines quotidiennes, lieux, achats, questions et réponses courantes.',[
+        ['B1 — Daily routines','OBJECTIF: parler des habitudes.\nVOCABULARY: wake up, work, study, eat, arrive, leave.\nDIALOGUE ORIGINAL: “I wake up at six. I take the bus at seven. I start work at eight.”\nQUESTIONS: 1) What time does the speaker wake up? 2) How does the speaker travel?\nRÉPONSES: 1) At six. 2) By bus.'],
+        ['B2 — Places and directions','OBJECTIF: demander et comprendre un itinéraire.\nEXPRESSIONS: turn left, turn right, go straight, next to, across from.\nDIALOGUE: “Excuse me, where is the library?” “Go straight and turn left. It is next to the bank.”\nQUESTION: Où se trouve la bibliothèque? RÉPONSE: À côté de la banque.'],
+        ['B3 — Shopping and services','OBJECTIF: comprendre prix et demandes simples.\nDIALOGUE: “How much is this notebook?” “It is three dollars.” “I will take two, please.”\nQUESTIONS: 1) What item does the customer want? 2) What is the price of one?\nRÉPONSES: 1) A notebook. 2) Three dollars.']
+      ]],
+      ['Level C — Intermediate','Conversations plus longues, annonces, détails et compréhension globale.',[
+        ['C1 — Making an appointment','OBJECTIF: identifier date, heure et motif d’un rendez-vous.\nDIALOGUE ORIGINAL: “Good afternoon. I would like to schedule an appointment for a checkup. Are you available Tuesday at 10:30?” “Tuesday is full, but Wednesday at 11:00 is available.”\nQUESTIONS: 1) What is the appointment for? 2) Which day is available?\nRÉPONSES: 1) A checkup. 2) Wednesday.'],
+        ['C2 — Understanding announcements','OBJECTIF: repérer les informations importantes d’une annonce.\nANNONCE: “Attention passengers. Bus 24 to downtown will depart from platform three in ten minutes. Please have your tickets ready.”\nQUESTIONS: 1) Which bus? 2) Which platform? 3) When will it depart?\nRÉPONSES: 1) Bus 24. 2) Platform three. 3) In ten minutes.'],
+        ['C3 — Main idea and details','OBJECTIF: distinguer idée principale et détails.\nTEXTE: “The community center offers free computer classes every Saturday. Students should register online because seats are limited.”\nQUESTIONS: 1) What does the center offer? 2) When? 3) Why register online?\nRÉPONSES: 1) Free computer classes. 2) Every Saturday. 3) Seats are limited.']
+      ]],
+      ['Level D — Upper Intermediate','Conversations complexes, problèmes, opinions et inférences.',[
+        ['D1 — Explaining a problem','OBJECTIF: expliquer un problème et comprendre une solution.\nDIALOGUE: “My internet connection keeps dropping during online classes.” “Try restarting the router. If the problem continues, contact technical support.”\nQUESTIONS: 1) What is the problem? 2) What should the person try first?\nRÉPONSES: 1) The internet connection keeps dropping. 2) Restart the router.'],
+        ['D2 — Comparing options','OBJECTIF: comparer des choix à partir de critères.\nSITUATION: “The morning class costs $40 and meets twice a week. The evening class costs $35 and meets three times a week.”\nQUESTIONS: 1) Which class costs less? 2) Which meets more often?\nRÉPONSES: 1) Evening class. 2) Evening class.'],
+        ['D3 — Making inferences','OBJECTIF: comprendre une information implicite.\nTEXTE: “Maria arrived at the station soaking wet. She placed her umbrella beside the door.”\nQUESTION: What is most likely true about the weather? RÉPONSE: It was raining.']
+      ]],
+      ['Level E — Advanced','Textes et échanges détaillés, synthèse, intention et arguments.',[
+        ['E1 — Workplace communication','OBJECTIF: comprendre une communication professionnelle.\nMESSAGE: “Please submit the revised schedule by Thursday afternoon. Highlight any changes and notify the team if a deadline cannot be met.”\nQUESTIONS: 1) What must be submitted? 2) By when? 3) What should happen if a deadline cannot be met?\nRÉPONSES: 1) The revised schedule. 2) Thursday afternoon. 3) Notify the team.'],
+        ['E2 — Identifying purpose and tone','OBJECTIF: identifier l’intention et le ton d’un message.\nMESSAGE: “We appreciate your patience while the repairs are completed. The facility is expected to reopen Monday.”\nQUESTIONS: 1) What is the purpose? 2) What is the tone?\nRÉPONSES: 1) Informing users about repairs and reopening. 2) Polite/reassuring.'],
+        ['E3 — Summarizing information','OBJECTIF: résumer les idées essentielles.\nTEXTE: “A neighborhood garden began as a small volunteer project. It now provides fresh vegetables, teaches children about nutrition, and brings residents together.”\nTÂCHE: Résumez le texte en une phrase.\nEXEMPLE DE RÉPONSE: The garden provides food, education, and community connection.']
+      ]],
+      ['Level F — Exam Preparation','Entraînement global, gestion du temps et simulations originales.',[
+        ['F1 — Listening practice test','CONSIGNE: Faites lire le script à voix haute par un enseignant ou utilisez un enregistrement CETEP.\nSCRIPT ORIGINAL: “This is a reminder that the adult education workshop will take place on Saturday, June 14, from 9 a.m. until noon. Participants should bring a photo ID and arrive fifteen minutes early.”\nQUESTIONS: 1) What event is announced? 2) What date? 3) What should participants bring? 4) How early should they arrive?\nRÉPONSES: 1) Adult education workshop. 2) Saturday, June 14. 3) A photo ID. 4) Fifteen minutes early.'],
+        ['F2 — Reading practice test','TEXTE ORIGINAL: “Applicants may complete the form online or at the front desk. Incomplete applications will be returned. A confirmation email is sent after the application is received.”\nQUESTIONS: 1) Where can applicants complete the form? 2) What happens to incomplete applications? 3) When is the email sent?\nRÉPONSES: 1) Online or at the front desk. 2) They are returned. 3) After receipt.'],
+        ['F3 — Final review and study plan','PLAN: 1) Lisez d’abord toutes les consignes. 2) Repérez les mots-clés: who, what, where, when, why, how. 3) Écoutez ou lisez une première fois pour l’idée générale. 4) Reprenez les détails. 5) Vérifiez chaque réponse.\nÉVALUATION: L’enseignant peut utiliser ces activités pour préparer une évaluation CETEP originale. Cette leçon n’est pas un examen officiel CASAS et ne délivre pas de certification CASAS.']
+      ]]
+    ];
+    const addModule=db.prepare('INSERT INTO modules(program_id,title,description,order_no,active) VALUES(?,?,?,?,1)');
+    const addLesson=db.prepare("INSERT INTO lessons(module_id,title,type,content,order_no,active) VALUES(?,?,'Texte',?,?,1)");
+    for(let i=0;i<levels.length;i++){
+      const [title,description,lessons]=levels[i];
+      let module=db.prepare('SELECT id FROM modules WHERE program_id=? AND title=? LIMIT 1').get(program.id,title);
+      if(!module) module={id:addModule.run(program.id,title,description,i+1).lastInsertRowid};
+      for(let j=0;j<lessons.length;j++){
+        const [lessonTitle,content]=lessons[j];
+        if(!db.prepare('SELECT 1 FROM lessons WHERE module_id=? AND title=? LIMIT 1').get(module.id,lessonTitle)) addLesson.run(module.id,lessonTitle,content,j+1);
+      }
+    }
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
+  });
+  tx();
+  console.log('[CETEP CASAS] Cours original CETEP créé: niveaux A à F.');
+  return {applied:true};
+}
+
 // Promotions CETEP par défaut : elles sont ajoutées automatiquement sans supprimer
 // les publications déjà présentes. L'administrateur peut ensuite les modifier ou les supprimer.
 const defaultPromotions=[
@@ -1522,7 +1591,8 @@ async function startCETEP(){
   }
   // Ordre impératif: restaurer Neon, migrer le catalogue, sauvegarder, puis ouvrir HTTP.
   const catalogMigration=applyCatalogMigrations();
-  if(neonSql && catalogMigration.applied){
+  const casasMigration=applyCasasCourseMigration();
+  if(neonSql && (catalogMigration.applied || casasMigration.applied)){
     await flushNeonSnapshot();
     console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
   }
