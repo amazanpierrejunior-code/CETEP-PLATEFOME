@@ -483,6 +483,57 @@ function applyCasasCourseMigration(){
   return {applied:true};
 }
 
+// v15.5.12 — Publier le catalogue English & CASAS dans le programme Anglais réellement utilisé.
+// Migration additive: conserve les inscriptions, notes, progrès et contenus déjà créés.
+function applyAnglaisVideoCourseMigration(){
+  const key='cetep_anglais_video_course_v15512';
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
+  const tx=db.transaction(()=>{
+    const target=db.prepare("SELECT id FROM programs WHERE lower(trim(name))=lower(trim('Anglais')) AND active=1 ORDER BY id LIMIT 1").get();
+    if(!target){
+      console.warn('[CETEP ENGLISH] Programme Anglais introuvable; migration remise à la prochaine relance.');
+      return {applied:false,missingProgram:true};
+    }
+    const source=db.prepare("SELECT id FROM programs WHERE lower(trim(name))=lower(trim('English & CASAS Preparation — CETEP')) ORDER BY id LIMIT 1").get();
+    if(!source){
+      console.warn('[CETEP ENGLISH] Catalogue source CASAS introuvable; aucun contenu modifié.');
+      return {applied:false,missingSource:true};
+    }
+    const resources={
+      A:'https://learningenglish.voanews.com/a/lets-learn-english-lesson-one/3111026.html',
+      B:'https://learnenglish.britishcouncil.org/free-resources/general/video-series/starting-out',
+      C:'https://learnenglish.britishcouncil.org/free-resources/general/video-series/word-street',
+      D:'https://learnenglish.britishcouncil.org/free-resources/general/video-series/word-street',
+      E:'https://learnenglish.britishcouncil.org/free-resources/general/video-series/britain-great',
+      F:'https://learnenglish.britishcouncil.org/free-resources/general/video-zone'
+    };
+    const sourceModules=db.prepare('SELECT * FROM modules WHERE program_id=? ORDER BY order_no,id').all(source.id);
+    const findModule=db.prepare('SELECT id FROM modules WHERE program_id=? AND title=? LIMIT 1');
+    const addModule=db.prepare('INSERT INTO modules(program_id,title,description,order_no,active) VALUES(?,?,?,?,1)');
+    const sourceLessons=db.prepare('SELECT * FROM lessons WHERE module_id=? ORDER BY order_no,id');
+    const findLesson=db.prepare('SELECT id,video_url FROM lessons WHERE module_id=? AND title=? LIMIT 1');
+    const addLesson=db.prepare('INSERT INTO lessons(module_id,title,type,content,video_url,file_url,order_no,active) VALUES(?,?,?,?,?,?,?,1)');
+    const updateLesson=db.prepare("UPDATE lessons SET video_url=CASE WHEN video_url IS NULL OR trim(video_url)='' THEN ? ELSE video_url END,type=CASE WHEN type IS NULL OR trim(type)='' OR type='Texte' THEN 'Vidéo' ELSE type END WHERE id=?");
+    let modules=0,lessons=0,videos=0;
+    for(const sm of sourceModules){
+      let tm=findModule.get(target.id,sm.title);
+      if(!tm){const r=addModule.run(target.id,sm.title,sm.description||'Cours d’anglais CETEP avec vidéo, écoute, vocabulaire, grammaire et pratique orale.',sm.order_no||1);tm={id:Number(r.lastInsertRowid)};modules++;}
+      const prefix=String(sm.title||'').trim().charAt(0).toUpperCase();
+      for(const sl of sourceLessons.all(sm.id)){
+        const videoUrl=String(sl.title||'').startsWith('A1 —')?'https://www.youtube.com/watch?v=WR9_nsLyaEY':(resources[prefix]||resources.A);
+        let tl=findLesson.get(tm.id,sl.title);
+        if(!tl){const r=addLesson.run(tm.id,sl.title,'Vidéo',sl.content||'',sl.video_url||videoUrl,sl.file_url||'',sl.order_no||1);tl={id:Number(r.lastInsertRowid)};lessons++;videos++;}
+        else if(!String(tl.video_url||'').trim()){updateLesson.run(videoUrl,tl.id);videos++;}
+      }
+    }
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
+    return {applied:true,program_id:Number(target.id),modules,lessons,videos};
+  });
+  const result=tx();
+  if(result.applied) console.log('[CETEP ENGLISH] Cours vidéo ajouté au programme Anglais:',result);
+  return result;
+}
+
 // Promotions CETEP par défaut : elles sont ajoutées automatiquement sans supprimer
 // les publications déjà présentes. L'administrateur peut ensuite les modifier ou les supprimer.
 const defaultPromotions=[
@@ -1691,7 +1742,8 @@ async function startCETEP(){
   // Ordre impératif: restaurer Neon, migrer le catalogue, sauvegarder, puis ouvrir HTTP.
   const catalogMigration=applyCatalogMigrations();
   const casasMigration=applyCasasCourseMigration();
-  if(neonSql && (catalogMigration.applied || casasMigration.applied)){
+  const anglaisVideoMigration=applyAnglaisVideoCourseMigration();
+  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied)){
     await flushNeonSnapshot();
     console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
   }
