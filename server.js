@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.5-acces-anglais-reset-etudiant';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.11-espace-professeur-formations';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -1051,6 +1051,63 @@ app.get('/api/admin/programs',auth,role('admin'),(req,res)=>res.json(db.prepare(
 app.post('/api/admin/programs',auth,role('admin'),(req,res)=>{const b=req.body||{},name=String(b.name||'').trim();if(!name)return res.status(400).json({error:'Le nom de la formation est obligatoire.'});const r=db.prepare('INSERT INTO programs(name,duration,description,price_htg,monthly_fee_htg,program_group,fee_period,active) VALUES(?,?,?,?,?,?,?,?)').run(name,b.duration||'',b.description||'',Math.max(0,Number(b.price_htg||0)),Math.max(0,Number(b.monthly_fee_htg||0)),String(b.program_group||'').trim()||null,['Mensualité','Trimestriel'].includes(b.fee_period)?b.fee_period:'Mensualité',b.active===false?0:1);res.json({ok:true,id:r.lastInsertRowid});});
 app.put('/api/admin/programs/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},name=String(b.name||'').trim();if(!name)return res.status(400).json({error:'Le nom de la formation est obligatoire.'});const result=db.prepare('UPDATE programs SET name=?,duration=?,description=?,price_htg=?,monthly_fee_htg=?,program_group=?,fee_period=?,active=? WHERE id=?').run(name,b.duration||'',b.description||'',Math.max(0,Number(b.price_htg||0)),Math.max(0,Number(b.monthly_fee_htg||0)),String(b.program_group||'').trim()||null,['Mensualité','Trimestriel'].includes(b.fee_period)?b.fee_period:'Mensualité',b.active===false?0:1,req.params.id);if(!result.changes)return res.status(404).json({error:'Formation introuvable.'});res.json({ok:true});});
 app.delete('/api/admin/programs/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id);const linked=db.prepare('SELECT (SELECT COUNT(*) FROM enrollments WHERE program_id=?) + (SELECT COUNT(*) FROM payments WHERE program_id=?) + (SELECT COUNT(*) FROM certificates WHERE program_id=?) AS n').get(id,id,id).n;if(linked>0)return res.status(409).json({error:'Cette formation possède déjà des dossiers ou paiements. Désactivez-la au lieu de la supprimer afin de préserver l’historique.'});db.prepare('DELETE FROM programs WHERE id=?').run(id);res.json({ok:true});});
+// Teacher workspace APIs: teachers can only access programs explicitly assigned by administration.
+app.get('/api/teacher/me',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id,teacher_no,name,email FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  res.json({id:t.id,teacher_no:t.teacher_no,name:t.name,email:t.email});
+});
+app.get('/api/teacher/programs',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  res.json(db.prepare(`SELECT p.id,p.name,p.duration,p.description
+    FROM program_teachers pt JOIN programs p ON p.id=pt.program_id
+    WHERE pt.teacher_id=? AND p.active=1 ORDER BY p.name`).all(t.id));
+});
+app.get('/api/teacher/students',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  res.json(db.prepare(`SELECT DISTINCT s.id,s.student_no,s.name,p.name program_name
+    FROM program_teachers pt JOIN programs p ON p.id=pt.program_id
+    JOIN enrollments e ON e.program_id=pt.program_id
+    JOIN students s ON s.id=e.student_id
+    WHERE pt.teacher_id=? AND p.active=1 AND e.status='Actif' AND e.access_enabled=1
+    ORDER BY p.name,s.name`).all(t.id));
+});
+app.get('/api/teacher/modules',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  res.json(db.prepare(`SELECT m.*,p.name program_name FROM modules m
+    JOIN programs p ON p.id=m.program_id JOIN program_teachers pt ON pt.program_id=p.id
+    WHERE pt.teacher_id=? AND p.active=1 AND m.active=1 ORDER BY p.name,m.order_no,m.id`).all(t.id));
+});
+app.post('/api/teacher/modules',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  const b=req.body||{},programId=Number(b.program_id),title=String(b.title||'').trim();
+  if(!programId||!title)return res.status(400).json({error:'Formation et titre du module obligatoires.'});
+  const allowed=db.prepare(`SELECT p.id FROM programs p JOIN program_teachers pt ON pt.program_id=p.id
+    WHERE p.id=? AND pt.teacher_id=? AND p.active=1`).get(programId,t.id);
+  if(!allowed)return res.status(403).json({error:'Cette formation ne vous est pas affectée.'});
+  const r=db.prepare('INSERT INTO modules(program_id,title,description,order_no) VALUES(?,?,?,?)')
+    .run(programId,title,String(b.description||''),Math.max(1,Number(b.order_no||1)));
+  res.status(201).json({ok:true,id:r.lastInsertRowid});
+});
+app.post('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  const b=req.body||{},moduleId=Number(b.module_id),title=String(b.title||'').trim();
+  if(!moduleId||!title)return res.status(400).json({error:'Module et titre de la leçon obligatoires.'});
+  const allowed=db.prepare(`SELECT m.id FROM modules m JOIN program_teachers pt ON pt.program_id=m.program_id
+    JOIN programs p ON p.id=m.program_id WHERE m.id=? AND pt.teacher_id=? AND p.active=1 AND m.active=1`).get(moduleId,t.id);
+  if(!allowed)return res.status(403).json({error:'Ce module ne fait pas partie de vos formations affectées.'});
+  const type=['Texte','Vidéo','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';
+  if(type==='Classe en ligne'&&!String(b.meeting_url||'').trim())return res.status(400).json({error:'Le lien de la classe en ligne est obligatoire.'});
+  const r=db.prepare(`INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)));
+  res.status(201).json({ok:true,id:r.lastInsertRowid});
+});
+
 app.get('/api/admin/modules',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT m.*,p.name program_name FROM modules m JOIN programs p ON p.id=m.program_id ORDER BY p.id,m.order_no,m.id').all()));
 app.post('/api/admin/modules',auth,role('admin'),(req,res)=>{const b=req.body||{},programId=Number(b.program_id),title=String(b.title||'').trim();if(!programId||!title)return res.status(400).json({error:'Formation et titre obligatoires'});if(!db.prepare('SELECT 1 FROM programs WHERE id=?').get(programId))return res.status(400).json({error:'Formation introuvable'});const r=db.prepare('INSERT INTO modules(program_id,title,description,order_no) VALUES(?,?,?,?)').run(programId,title,String(b.description||''),Math.max(1,Number(b.order_no||1)));res.status(201).json({ok:true,id:r.lastInsertRowid});});
 app.put('/api/admin/modules/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},id=Number(req.params.id),title=String(b.title||'').trim();if(!title)return res.status(400).json({error:'Titre du module obligatoire'});const row=db.prepare('SELECT id FROM modules WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Module introuvable'});db.prepare('UPDATE modules SET title=?,description=?,order_no=? WHERE id=?').run(title,String(b.description||''),Math.max(1,Number(b.order_no||1)),id);res.json({ok:true});});
