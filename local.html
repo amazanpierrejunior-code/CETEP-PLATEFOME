@@ -15,4 +15,32 @@ $('#studentForm').onsubmit=e=>{e.preventDefault();const x=val(e.target);x.local_
 $('#syncBtn').onclick=async()=>{if(!navigator.onLine)return alert('Internet pa disponib. Rekonekte anvan synchronisation.');const b=$('#syncBtn');b.disabled=true;$('#syncMsg').textContent='Synchronisation Online ↔ Local en cours...';try{if(data.programs.length||data.students.length||data.payments.length||data.attendance.length){const r=await fetch('/api/admin/local-sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(r.status===401){location='/login';return}if(!r.ok)throw Error(j.error||'Erreur');data=blank();save();}const r2=await fetch('/api/admin/local-snapshot');const snap=await r2.json();if(r2.status===401){location='/login';return}if(!r2.ok)throw Error(snap.error||'Erreur de lecture Online');onlineSnapshot=snap;localStorage.setItem(ONLINE_KEY,JSON.stringify(snap));const t=snap.tables||{};$('#syncMsg').innerHTML='<span class="ok">✅ Synchronisation complète terminée — '+Object.values(t).reduce((n,a)=>n+(Array.isArray(a)?a.length:0),0)+' enregistrements sauvegardés localement.</span>';render();alert('Tout CETEP Online a été copié sur CETEP Local.')}catch(e){$('#syncMsg').innerHTML='<span class="warn">❌ '+e.message+'</span>'}finally{b.disabled=false}};
 $('#exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({version:1,created_at:new Date().toISOString(),data},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='cetep-local-backup.json';a.click();URL.revokeObjectURL(a.href)};$('#importBtn').onclick=()=>$('#importFile').click();$('#importFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const j=JSON.parse(await f.text());if(!j.data)throw Error('Sauvegarde invalide');data={...blank(),...j.data};save();alert('Sauvegarde locale importée.')}catch(err){alert(err.message)}};
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});status();render();
-</script></body></html>
+</script><style id="cetep-password-eye-style">
+.cetep-password-wrap{position:relative;display:inline-flex;width:100%;align-items:center;vertical-align:middle}
+.cetep-password-wrap>input{width:100%;padding-right:44px!important;box-sizing:border-box}
+.cetep-password-eye{position:absolute;right:7px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:#526174;cursor:pointer;padding:6px 7px;border-radius:6px;font-size:18px;line-height:1;z-index:2}
+.cetep-password-eye:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+.cetep-password-eye:hover{background:rgba(100,116,139,.12)}
+</style>
+<script id="cetep-password-eye-script">
+(()=>{
+ const eyeOpen='👁',eyeClosed='🙈';
+ function addEye(input){
+  if(!input||input.dataset.cetepEye==='1'||input.type!=='password')return;
+  if(input.parentElement?.classList.contains('cetep-password-wrap'))return;
+  const wrap=document.createElement('span');wrap.className='cetep-password-wrap';
+  input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);
+  const btn=document.createElement('button');btn.type='button';btn.className='cetep-password-eye';
+  btn.setAttribute('aria-label','Afficher le mot de passe');btn.setAttribute('aria-pressed','false');btn.textContent=eyeOpen;
+  btn.addEventListener('click',()=>{
+   const show=input.type==='password';input.type=show?'text':'password';btn.textContent=show?eyeClosed:eyeOpen;
+   btn.setAttribute('aria-label',show?'Masquer le mot de passe':'Afficher le mot de passe');btn.setAttribute('aria-pressed',show?'true':'false');input.focus();
+  });
+  wrap.appendChild(btn);input.dataset.cetepEye='1';
+ }
+ function scan(root){if(root.matches?.('input[type="password"]'))addEye(root);root.querySelectorAll?.('input[type="password"]').forEach(addEye)}
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>scan(document));else scan(document);
+ new MutationObserver(records=>records.forEach(r=>r.addedNodes.forEach(n=>{if(n.nodeType===1)scan(n)}))).observe(document.documentElement,{childList:true,subtree:true});
+})();
+</script>
+</body></html>

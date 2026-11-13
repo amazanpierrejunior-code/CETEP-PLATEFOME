@@ -29,4 +29,32 @@ $('#admission').onsubmit=async e=>{e.preventDefault();if(identityBlocked){$('#ad
 $('#paymentProofFile').onchange=async e=>{const file=e.target.files[0],box=$('#paymentProofPreview'),img=$('#paymentProofPreviewImg');if(!file){box.classList.add('hidden');img.removeAttribute('src');return}if(file.size>5*1024*1024){alert('Photo maximum 5 Mo');e.target.value='';box.classList.add('hidden');return}img.src=await fileToDataUrl(file);img.onclick=()=>openPhoto(img.src,'Confirmation de paiement');box.classList.remove('hidden')};$('#enrollmentPayment').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.student_no=currentStudentNo;const file=$('#paymentProofFile').files[0];if(!file && !b.payment_message)return alert('Ajoutez une photo de confirmation ou écrivez un message de confirmation.');if(file){if(file.size>5*1024*1024)return alert('Photo maximum 5 Mo');b.payment_proof=await fileToDataUrl(file)}try{const r=await fetch('/api/public/enrollment-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});const j=await r.json();if(!r.ok)throw Error(j.error||'Erreur');$('#payMsg').className='success';$('#payMsg').innerHTML='<b>✅ Paiement transmis.</b><br>Référence : <strong>'+esc(j.reference)+'</strong><br>'+esc(j.message);e.target.querySelector('[name="reference"]').value=''}catch(err){$('#payMsg').className='error';$('#payMsg').textContent=err.message}};
 $('#donation').onsubmit=async e=>{e.preventDefault();const r=await fetch('/api/public/donation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});const j=await r.json();$('#donMsg').textContent=j.message||j.error||'';if(r.ok)e.target.reset()};
 load();
-</script><footer style="text-align:center;padding:28px 12px;color:#5b6575;font-size:13px">CETEP — Formation • Orientation • Insertion professionnelle · <span id="cetepBuild">Version 14.2.0</span></footer></body></html>
+</script><footer style="text-align:center;padding:28px 12px;color:#5b6575;font-size:13px">CETEP — Formation • Orientation • Insertion professionnelle · <span id="cetepBuild">Version 14.2.0</span></footer><style id="cetep-password-eye-style">
+.cetep-password-wrap{position:relative;display:inline-flex;width:100%;align-items:center;vertical-align:middle}
+.cetep-password-wrap>input{width:100%;padding-right:44px!important;box-sizing:border-box}
+.cetep-password-eye{position:absolute;right:7px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:#526174;cursor:pointer;padding:6px 7px;border-radius:6px;font-size:18px;line-height:1;z-index:2}
+.cetep-password-eye:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+.cetep-password-eye:hover{background:rgba(100,116,139,.12)}
+</style>
+<script id="cetep-password-eye-script">
+(()=>{
+ const eyeOpen='👁',eyeClosed='🙈';
+ function addEye(input){
+  if(!input||input.dataset.cetepEye==='1'||input.type!=='password')return;
+  if(input.parentElement?.classList.contains('cetep-password-wrap'))return;
+  const wrap=document.createElement('span');wrap.className='cetep-password-wrap';
+  input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);
+  const btn=document.createElement('button');btn.type='button';btn.className='cetep-password-eye';
+  btn.setAttribute('aria-label','Afficher le mot de passe');btn.setAttribute('aria-pressed','false');btn.textContent=eyeOpen;
+  btn.addEventListener('click',()=>{
+   const show=input.type==='password';input.type=show?'text':'password';btn.textContent=show?eyeClosed:eyeOpen;
+   btn.setAttribute('aria-label',show?'Masquer le mot de passe':'Afficher le mot de passe');btn.setAttribute('aria-pressed',show?'true':'false');input.focus();
+  });
+  wrap.appendChild(btn);input.dataset.cetepEye='1';
+ }
+ function scan(root){if(root.matches?.('input[type="password"]'))addEye(root);root.querySelectorAll?.('input[type="password"]').forEach(addEye)}
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>scan(document));else scan(document);
+ new MutationObserver(records=>records.forEach(r=>r.addedNodes.forEach(n=>{if(n.nodeType===1)scan(n)}))).observe(document.documentElement,{childList:true,subtree:true});
+})();
+</script>
+</body></html>
