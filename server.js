@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.11-espace-professeur-formations';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.13-anglais-level-a-interactif';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -531,6 +531,49 @@ function applyAnglaisVideoCourseMigration(){
   });
   const result=tx();
   if(result.applied) console.log('[CETEP ENGLISH] Cours vidéo ajouté au programme Anglais:',result);
+  return result;
+}
+
+// v15.5.13 — Parcours interactif original CETEP pour le Level A.
+// Migration additive et idempotente: ne supprime ni ne réinitialise aucun contenu/progrès existant.
+function applyEnglishLevelAMigration(){
+  const key='cetep_english_level_a_interactive_v15513';
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
+  const tx=db.transaction(()=>{
+    const program=db.prepare("SELECT id FROM programs WHERE lower(trim(name))=lower(trim('Anglais')) AND active=1 ORDER BY id LIMIT 1").get();
+    if(!program) return {applied:false,missingProgram:true};
+    let module=db.prepare("SELECT id FROM modules WHERE program_id=? AND title='Level A — Beginner' ORDER BY id LIMIT 1").get(program.id);
+    if(!module) module={id:Number(db.prepare('INSERT INTO modules(program_id,title,description,order_no,active) VALUES(?,?,?,?,1)').run(program.id,'Level A — Beginner','Parcours débutant CETEP: saluer, se présenter, comprendre les consignes et communiquer dans des situations simples.',1).lastInsertRowid)};
+    const lessons=[
+      ['A4 — Alphabet and spelling names','OBJECTIF: reconnaître les lettres et épeler un prénom ou un nom.\n\nLEARN: The English alphabet has 26 letters.\nUSEFUL QUESTIONS: How do you spell your name? — Can you repeat that, please?\nMODEL: My name is Marie. M-A-R-I-E.\n\nPRONUNCIATION: Écoutez chaque lettre, puis répétez lentement. Faites attention aux noms des lettres E /iː/, I /aɪ/ et A /eɪ/.\n\nPRACTICE: Spell your first name aloud. Then spell CETEP: C-E-T-E-P.\n\nMINI TASK: Ask a partner: “How do you spell your name?”', 'https://learningenglish.voanews.com/a/lets-learn-english-lesson-2-hello/3113733.html'],
+      ['A5 — People and the verb BE','OBJECTIF: sèvi ak I, you, he, she ak vèb BE pou prezante moun.\n\nGRAMMAR: I am; You are; He is; She is.\nCONTRACTIONS: I’m; You’re; He’s; She’s.\n\nEXAMPLES: I am a student. You are my teacher. She is Ana. He is Pete.\n\nDIALOGUE ORIGINAL:\nA: Who is she?\nB: She is my teacher.\nA: Are you a student?\nB: Yes, I am.\n\nPRACTICE: Complete aloud: “I ___ a student.” “He ___ my friend.”\nANSWERS: am; is.', 'https://learningenglish.voanews.com/a/lets-learn-english-lesson-2-hello/3113733.html'],
+      ['A6 — Everyday objects: this, that, a and an','OBJECTIF: nonmen bagay ki nan klas la epi sèvi ak this/that ak a/an.\n\nVOCABULARY: book = liv; pen = plim; bag = sak; phone = telefòn; chair = chèz; table = tab.\n\nGRAMMAR: This is a book. That is a chair. It is an apple. Use “a” before a consonant sound and “an” before a vowel sound.\n\nDIALOGUE ORIGINAL:\nA: What is this?\nB: It is a pen.\nA: Is that your book?\nB: Yes, it is.\n\nPRACTICE: Point to an object and say: “This is a ___.”', 'https://learningenglish.voanews.com/a/lets-learn-english-lesson-4/3168920.html'],
+      ['A7 — Places and simple locations','OBJECTIF: di kote moun ye epi konprann kèk chanm nan kay la.\n\nVOCABULARY: kitchen = kwizin; bedroom = chanm; bathroom = twalèt; living room = salon; here = isit; there = laba.\n\nGRAMMAR: I am in the kitchen. She is in the bedroom.\n\nDIALOGUE ORIGINAL:\nA: Where are you?\nB: I am here, in the kitchen.\nA: Where is Pete?\nB: He is in the living room.\n\nPRACTICE: Answer: “Where are you now?” Use “I am…”', 'https://learningenglish.voanews.com/a/lets-learn-english-lesson-5-where-are-you/3168971.html'],
+      ['A8 — Review and beginner checkpoint','OBJECTIF: revize salitasyon, prezantasyon, nimewo, objè ak kote.\n\nREVIEW DIALOGUE ORIGINAL:\nA: Good morning. What is your name?\nB: My name is Jean.\nA: How do you spell it?\nB: J-E-A-N.\nA: Are you a student?\nB: Yes, I am.\n\nCHECKLIST: I can greet someone. I can say my name. I can spell my name. I can understand simple classroom instructions. I can name common objects and say where I am.\n\nFINAL TASK: Record or say a 4-sentence introduction: greeting, name, role, and one place where you are.\n\nCette évaluation est un exercice pédagogique original CETEP; ce n’est pas un examen officiel CASAS.', 'https://learningenglish.voanews.com/a/lets-lear-english-review-lessons-1-5/4053916.html']
+    ];
+    const find=db.prepare('SELECT id FROM lessons WHERE module_id=? AND title=? LIMIT 1');
+    const add=db.prepare("INSERT INTO lessons(module_id,title,type,content,video_url,order_no,active) VALUES(?,?,'Vidéo',?,?,?,1)");
+    let added=0,links=0;
+    for(let i=0;i<lessons.length;i++){
+      const [title,content,url]=lessons[i];
+      let row=find.get(module.id,title);
+      if(!row){add.run(module.id,title,content,url,i+4);added++;links++;}
+      else db.prepare("UPDATE lessons SET video_url=CASE WHEN video_url IS NULL OR trim(video_url)='' THEN ? ELSE video_url END WHERE id=?").run(url,row.id);
+    }
+    // Use lesson-specific official learning resources instead of repeating one unrelated URL.
+    const resourceMap={
+      'A1 — Greetings and introductions':'https://learningenglish.voanews.com/a/lets-learn-english-lesson-one/3111026.html',
+      'A2 — Numbers, dates and personal information':'https://learningenglish.voanews.com/a/lets-learn-english-lesson-3-i-am-here/3126527.html',
+      'A3 — Everyday instructions':''
+    };
+    for(const [title,url] of Object.entries(resourceMap)){
+      db.prepare("UPDATE lessons SET video_url=? WHERE module_id=? AND title=?").run(url,module.id,title);
+    }
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
+    return {applied:true,program_id:Number(program.id),module_id:Number(module.id),lessons_added:added,resource_links:links+3};
+  });
+  const result=tx();
+  if(result.applied) console.log('[CETEP ENGLISH] Level A interactif CETEP installé:',result);
   return result;
 }
 
@@ -1743,7 +1786,8 @@ async function startCETEP(){
   const catalogMigration=applyCatalogMigrations();
   const casasMigration=applyCasasCourseMigration();
   const anglaisVideoMigration=applyAnglaisVideoCourseMigration();
-  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied)){
+  const englishLevelAMigration=applyEnglishLevelAMigration();
+  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied)){
     await flushNeonSnapshot();
     console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
   }
