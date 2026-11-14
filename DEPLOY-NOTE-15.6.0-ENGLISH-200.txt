@@ -1,0 +1,28 @@
+CETEP v15.6.0 — ENGLISH PROGRAM (200 LESSONS)
+
+Included
+- Four English levels (A–D), 50 lesson records per level (200 total).
+- Additive, idempotent startup migration; existing student records, payments, certificates and progress are preserved.
+- English content now loads from the student’s actual Anglais enrollment instead of the legacy six-level source catalog.
+- Legacy Level E/F modules are retained but hidden in the active four-level Anglais course.
+- Teacher lesson listing and editing endpoints are restricted to assigned active programs.
+- Existing administrator-authored lessons are protected from teacher edits.
+
+Important content note
+The 200 records provide a structured teaching framework (objective, practice sequence and self-check).
+They are not 200 fully produced multimedia lessons yet. Lesson-specific audio, video, vocabulary packs,
+question banks and answer keys still need to be authored/attached by CETEP before those lessons are
+considered fully multimedia-ready. The course is original CETEP material and is not official CASAS content.
+
+Deployment
+1. Back up the production database and current source before deployment.
+2. Deploy this source package using the existing Render service and existing environment variables.
+3. Do not reset the database or change DATABASE_URL/JWT_SECRET.
+4. On startup, the migration adds missing lessons and metadata without deleting existing records.
+5. Verify /api/version reports 15.6.0 and test an Anglais student account with active enrollment.
+
+Validation performed in this build
+- node --check server.js: passed.
+- Curriculum JSON parse and 4 x 50 lesson count: passed.
+- Full runtime/API tests were not run because node dependencies and production database credentials
+  are not included in this source archive. No Render deployment was performed.

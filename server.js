@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.5.13-anglais-level-a-interactif';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.0-english-200-lessons';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS teachers(id INTEGER PRIMARY KEY AUTOINCREMENT,teacher
 CREATE TABLE IF NOT EXISTS program_teachers(program_id INTEGER NOT NULL,teacher_id INTEGER NOT NULL,PRIMARY KEY(program_id,teacher_id),FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,FOREIGN KEY(teacher_id) REFERENCES teachers(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS enrollments(id INTEGER PRIMARY KEY AUTOINCREMENT,student_id INTEGER NOT NULL,program_id INTEGER NOT NULL,status TEXT DEFAULT 'Actif',enrolled_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(student_id,program_id),FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS modules(id INTEGER PRIMARY KEY AUTOINCREMENT,program_id INTEGER NOT NULL,title TEXT NOT NULL,description TEXT,order_no INTEGER DEFAULT 1,active INTEGER DEFAULT 1,FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS lessons(id INTEGER PRIMARY KEY AUTOINCREMENT,module_id INTEGER NOT NULL,title TEXT NOT NULL,type TEXT DEFAULT 'Texte',content TEXT,video_url TEXT,file_url TEXT,order_no INTEGER DEFAULT 1,active INTEGER DEFAULT 1,FOREIGN KEY(module_id) REFERENCES modules(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS lessons(id INTEGER PRIMARY KEY AUTOINCREMENT,module_id INTEGER NOT NULL,title TEXT NOT NULL,type TEXT DEFAULT 'Texte',content TEXT,video_url TEXT,file_url TEXT,order_no INTEGER DEFAULT 1,active INTEGER DEFAULT 1,created_by_role TEXT DEFAULT 'admin',created_by INTEGER,teacher_editable INTEGER DEFAULT 0,FOREIGN KEY(module_id) REFERENCES modules(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS lesson_progress(student_id INTEGER NOT NULL,lesson_id INTEGER NOT NULL,completed INTEGER DEFAULT 0,completed_at TEXT,PRIMARY KEY(student_id,lesson_id),FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,FOREIGN KEY(lesson_id) REFERENCES lessons(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS assignments(id INTEGER PRIMARY KEY AUTOINCREMENT,module_id INTEGER NOT NULL,title TEXT NOT NULL,instructions TEXT,max_score REAL DEFAULT 100,due_date TEXT,active INTEGER DEFAULT 1,FOREIGN KEY(module_id) REFERENCES modules(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS submissions(id INTEGER PRIMARY KEY AUTOINCREMENT,assignment_id INTEGER NOT NULL,student_id INTEGER NOT NULL,answer TEXT,file_url TEXT,score REAL,feedback TEXT,submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,graded_at TEXT,UNIQUE(assignment_id,student_id),FOREIGN KEY(assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE);
@@ -574,6 +574,52 @@ function applyEnglishLevelAMigration(){
   });
   const result=tx();
   if(result.applied) console.log('[CETEP ENGLISH] Level A interactif CETEP installé:',result);
+  return result;
+}
+
+// v15.6.0 — Catalogue complet CETEP English: 4 niveaux × 50 leçons.
+// Migration additive: conserve les modules, leçons, inscriptions et progrès déjà présents.
+function applyEnglish200CourseMigration(){
+  const key='cetep_english_200_lessons_v1560';
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
+  const catalogPath=path.join(__dirname,'english-curriculum-200.json');
+  if(!fs.existsSync(catalogPath)) throw new Error('Catalogue English 200 lessons introuvable: '+catalogPath);
+  const catalog=JSON.parse(fs.readFileSync(catalogPath,'utf8'));
+  const tx=db.transaction(()=>{
+    const lessonColumns=new Set(db.prepare('PRAGMA table_info(lessons)').all().map(c=>c.name));
+    if(!lessonColumns.has('created_by_role')) db.exec("ALTER TABLE lessons ADD COLUMN created_by_role TEXT DEFAULT 'admin'");
+    if(!lessonColumns.has('created_by')) db.exec('ALTER TABLE lessons ADD COLUMN created_by INTEGER');
+    if(!lessonColumns.has('teacher_editable')) db.exec('ALTER TABLE lessons ADD COLUMN teacher_editable INTEGER DEFAULT 0');
+    const program=db.prepare("SELECT id FROM programs WHERE lower(trim(name))=lower(trim('Anglais')) AND active=1 ORDER BY id LIMIT 1").get();
+    if(!program) return {applied:false,missingProgram:true};
+    const findModule=db.prepare('SELECT id FROM modules WHERE program_id=? AND title=? ORDER BY id LIMIT 1');
+    const addModule=db.prepare('INSERT INTO modules(program_id,title,description,order_no,active) VALUES(?,?,?,?,1)');
+    const countLessons=db.prepare('SELECT COUNT(*) c FROM lessons WHERE module_id=?');
+    const addLesson=db.prepare("INSERT INTO lessons(module_id,title,type,content,order_no,active) VALUES(?,?,'Texte',?,?,1)");
+    let added=0,modules=0;
+    for(let n=0;n<catalog.levels.length;n++){
+      const level=catalog.levels[n];
+      let module=findModule.get(program.id,level.title);
+      if(!module){const r=addModule.run(program.id,level.title,level.description,n+1);module={id:Number(r.lastInsertRowid)};modules++;}
+      let current=Number(countLessons.get(module.id).c||0);
+      for(const lesson of level.lessons){
+        // Existing lessons occupy their original positions; fill only the missing positions.
+        if(Number(lesson.order)<=current) continue;
+        const existing=db.prepare('SELECT id FROM lessons WHERE module_id=? AND title=? LIMIT 1').get(module.id,lesson.title);
+        if(existing) continue;
+        addLesson.run(module.id,lesson.title,lesson.content,lesson.order);
+        current++;added++;
+      }
+      db.prepare('UPDATE modules SET active=1,order_no=? WHERE id=?').run(n+1,module.id);
+    }
+    // The four-level CETEP course is A–D. Older E/F archive modules are retained but hidden.
+    db.prepare("UPDATE modules SET active=0 WHERE program_id=? AND (title LIKE 'Level E%' OR title LIKE 'Level F%')").run(program.id);
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
+    const totals=db.prepare("SELECT m.title,COUNT(l.id) lessons FROM modules m LEFT JOIN lessons l ON l.module_id=m.id AND l.active=1 WHERE m.program_id=? AND m.active=1 AND m.title IN ('Level A — Beginner','Level B — Elementary','Level C — Intermediate','Level D — Advanced') GROUP BY m.id ORDER BY m.order_no").all(program.id);
+    return {applied:true,program_id:Number(program.id),modules_added:modules,lessons_added:added,levels:totals};
+  });
+  const result=tx();
+  if(result.applied) console.log('[CETEP ENGLISH] Programme de 200 leçons installé:',result);
   return result;
 }
 
@@ -1197,9 +1243,34 @@ app.post('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
   if(!allowed)return res.status(403).json({error:'Ce module ne fait pas partie de vos formations affectées.'});
   const type=['Texte','Vidéo','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';
   if(type==='Classe en ligne'&&!String(b.meeting_url||'').trim())return res.status(400).json({error:'Le lien de la classe en ligne est obligatoire.'});
-  const r=db.prepare(`INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no)
-    VALUES(?,?,?,?,?,?,?,?,?,?)`).run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)));
+  const r=db.prepare(`INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no,created_by_role,created_by,teacher_editable)
+    VALUES(?,?,?,?,?,?,?,?,?,?, 'teacher', ?,1)`).run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)),t.id);
   res.status(201).json({ok:true,id:r.lastInsertRowid});
+});
+app.get('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  const moduleId=Number(req.query.module_id||0);
+  if(!moduleId)return res.status(400).json({error:'Module obligatoire.'});
+  const allowed=db.prepare(`SELECT m.id FROM modules m JOIN program_teachers pt ON pt.program_id=m.program_id
+    JOIN programs p ON p.id=m.program_id WHERE m.id=? AND pt.teacher_id=? AND p.active=1 AND m.active=1`).get(moduleId,t.id);
+  if(!allowed)return res.status(403).json({error:'Ce module ne fait pas partie de vos formations affectées.'});
+  res.json(db.prepare(`SELECT id,module_id,title,type,content,video_url,file_url,order_no,created_by_role,teacher_editable
+    FROM lessons WHERE module_id=? AND active=1 ORDER BY order_no,id`).all(moduleId));
+});
+app.put('/api/teacher/lessons/:id',auth,role('teacher'),(req,res)=>{
+  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+  const id=Number(req.params.id),b=req.body||{},title=String(b.title||'').trim();
+  const lesson=db.prepare(`SELECT l.id,l.module_id FROM lessons l JOIN modules m ON m.id=l.module_id
+    JOIN program_teachers pt ON pt.program_id=m.program_id JOIN programs p ON p.id=m.program_id
+    WHERE l.id=? AND l.active=1 AND m.active=1 AND p.active=1 AND pt.teacher_id=?
+    AND l.teacher_editable=1 AND l.created_by_role='teacher' AND l.created_by=?`).get(id,t.id,t.id);
+  if(!lesson)return res.status(403).json({error:'Cette leçon est protégée ou ne vous appartient pas. Seul l’administrateur peut la modifier.'});
+  if(!title)return res.status(400).json({error:'Titre de la leçon obligatoire.'});
+  const type=['Texte','Vidéo','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';
+  db.prepare('UPDATE lessons SET title=?,type=?,content=?,video_url=?,file_url=?,order_no=? WHERE id=?').run(title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),Math.max(1,Number(b.order_no||1)),id);
+  res.json({ok:true});
 });
 
 app.get('/api/admin/modules',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT m.*,p.name program_name FROM modules m JOIN programs p ON p.id=m.program_id ORDER BY p.id,m.order_no,m.id').all()));
@@ -1380,17 +1451,7 @@ app.get('/api/student/me',auth,role('student'),(req,res)=>{
  const enrollments=db.prepare(`SELECT e.*,p.name program_name,p.duration,p.price_htg,
   COALESCE((SELECT SUM(pay.amount_htg) FROM payments pay WHERE pay.student_id=e.student_id AND pay.program_id=e.program_id AND pay.status='Confirmé'),0) paid
   FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? ORDER BY e.enrolled_at`).all(sid);
- const englishCourse=db.prepare("SELECT id,name FROM programs WHERE lower(name) LIKE '%english%casas%' ORDER BY active DESC,id LIMIT 1").get();
- if(englishCourse){
-  for(const e of enrollments){
-   if(/anglais/i.test(String(e.program_name||''))){
-    // Keep the real enrollment ID for fees, grades and official documents;
-    // only label its online learning content as the CETEP English/CASAS course.
-    e.program_name='English & CASAS Preparation — CETEP';
-    e.course_content_program_id=Number(englishCourse.id);
-   }
-  }
- }
+ // Le contenu Anglais est désormais servi depuis la formation réellement choisie (4 niveaux A–D).
  res.json({...student,enrollments});
 });
 app.get('/api/student/content',auth,role('student'),(req,res)=>{
@@ -1398,11 +1459,7 @@ app.get('/api/student/content',auth,role('student'),(req,res)=>{
  if(!requestedPid)return res.status(403).json({error:'Formation non précisée.'});
  const enrollment=db.prepare("SELECT e.program_id,p.name FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? AND e.program_id=? AND e.status='Actif' AND e.access_enabled=1").get(sid,requestedPid);
  if(!enrollment)return res.status(403).json({error:'Accès non autorisé à cette formation.'});
- let contentPid=requestedPid;
- if(/anglais/i.test(String(enrollment.name||''))){
-  const course=db.prepare("SELECT id FROM programs WHERE lower(name) LIKE '%english%casas%' AND active=1 ORDER BY id LIMIT 1").get();
-  if(course)contentPid=Number(course.id);
- }
+ const contentPid=requestedPid;
  const rows=db.prepare(`SELECT m.id module_id,m.title module_title,l.id lesson_id,l.title lesson_title,l.type,l.content,l.video_url,l.file_url,l.meeting_url,l.scheduled_at,l.duration_minutes,COALESCE(lp.completed,0) completed FROM modules m JOIN lessons l ON l.module_id=m.id LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.student_id=? WHERE m.program_id=? AND m.active=1 AND l.active=1 ORDER BY m.order_no,l.order_no`).all(sid,contentPid);
  res.json(rows);
 });
@@ -1787,7 +1844,8 @@ async function startCETEP(){
   const casasMigration=applyCasasCourseMigration();
   const anglaisVideoMigration=applyAnglaisVideoCourseMigration();
   const englishLevelAMigration=applyEnglishLevelAMigration();
-  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied)){
+  const english200Migration=applyEnglish200CourseMigration();
+  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied || english200Migration.applied)){
     await flushNeonSnapshot();
     console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
   }
