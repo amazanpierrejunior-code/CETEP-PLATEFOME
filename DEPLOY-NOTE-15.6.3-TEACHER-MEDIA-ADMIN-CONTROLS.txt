@@ -1,0 +1,20 @@
+CETEP v15.6.3 — Teacher Media & Administration Controls
+
+Files to replace in the GitHub repository (keep the folder paths):
+- server.js
+- teacher.html
+- admin.html
+- public/student.html
+
+Changes:
+- Adds Audio (MP3/WAV) lesson type for teachers and students, with an audio player.
+- Adds teacher-side audio upload preview and direct upload capped at 8 MB; larger media should use a hosted URL.
+- Adds administrator control to remove an individual teacher/program assignment with confirmation; this does not delete the program, teacher, students, payments or certificates.
+- Restricts the teacher lesson-list API to lessons created by that logged-in teacher, while the existing server-side edit policy continues to protect administrator-created lessons.
+- Keeps administrator module/lesson management and confirmation-based deletion controls.
+
+Important:
+- Do not replace or reset the Neon database.
+- Do not change DATABASE_URL or JWT_SECRET.
+- After deployment, open Administration > Professeurs > Affectations and remove the incorrect Aide-soignant(e) assignment from Olgy Pierre Louis. Keep Anglais. The removal affects only that teacher's assignment.
+- Test one small MP3/WAV (8 MB max), one PDF, and a hosted video URL. Direct video/document uploads remain limited by the application's request-size constraints; use hosted links for large files.
