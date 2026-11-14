@@ -1,0 +1,8 @@
+CETEP v15.6.2 — Corrections catalogue Anglais et gestion des étudiants
+
+- Désactive le choix erroné « Anglais, Espagnol » sans effacer les historiques.
+- Réconcilie le catalogue Anglais sur 4 niveaux A-D et 50 leçons actives par niveau. Les anciennes leçons non retenues sont archivées (active=0), non supprimées.
+- Ajoute une action Supprimer étudiant avec confirmation; le retrait est réversible et conserve paiements, certificats, notes et documents.
+- La migration est versionnée et idempotente.
+
+Déploiement: sauvegarder la base avant déploiement; publier le contenu de cette archive sur la branche main du dépôt connecté à Render. Ne pas modifier DATABASE_URL ni JWT_SECRET. Après déploiement, vérifier les logs [CETEP ENGLISH v15.6.2] et le catalogue dans l’espace étudiant.
