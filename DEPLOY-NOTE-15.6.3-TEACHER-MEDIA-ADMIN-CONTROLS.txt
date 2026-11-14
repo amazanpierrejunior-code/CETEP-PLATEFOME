@@ -1,20 +1,30 @@
-CETEP v15.6.3 — Teacher Media & Administration Controls
+CETEP v15.6.3 — Corrections espace professeur / administration
 
-Files to replace in the GitHub repository (keep the folder paths):
-- server.js
-- teacher.html
-- admin.html
-- public/student.html
+Fichiers à remplacer dans le dépôt GitHub (respecter exactement les chemins) :
+- server.js                         (racine)
+- teacher.html                      (racine)
+- admin.html                        (racine)
+- public/student.html               (dans public/)
 
-Changes:
-- Adds Audio (MP3/WAV) lesson type for teachers and students, with an audio player.
-- Adds teacher-side audio upload preview and direct upload capped at 8 MB; larger media should use a hosted URL.
-- Adds administrator control to remove an individual teacher/program assignment with confirmation; this does not delete the program, teacher, students, payments or certificates.
-- Restricts the teacher lesson-list API to lessons created by that logged-in teacher, while the existing server-side edit policy continues to protect administrator-created lessons.
-- Keeps administrator module/lesson management and confirmation-based deletion controls.
+Corrections incluses :
+- Ajout du type de leçon Audio MP3/WAV, import direct et aperçu audio.
+- Aperçu vidéo et import direct vidéo; lecture vidéo directe dans l'espace étudiant pour les fichiers MP4/WebM/OGG.
+- Limite d'import direct portée à 12 Mo par fichier; les médias plus volumineux doivent être hébergés et ajoutés par URL.
+- Le professeur ne voit que les formations qui lui sont affectées et ne peut modifier que ses propres leçons; les contenus administrateur restent protégés côté serveur.
+- Migration ciblée : retire Aide-soignant(e) de l'affectation du compte PROF-2026-0001 (Olgy Pierre Louis) et conserve Anglais. Elle ne supprime ni le professeur ni la formation.
+- Migration ciblée : archive les anciens modules anglais non canoniques; seuls Level A — Beginner, Level B — Elementary, Level C — Intermediate et Level D — Advanced restent actifs. Les anciens modules, leçons et progrès sont conservés en base.
+- L'administration peut archiver un module ou une leçon avec confirmation. L'archivage masque le contenu des espaces de cours sans supprimer les historiques ni les progrès étudiants.
+- L'administration conserve les outils de gestion des affectations professeur/formation et des contenus.
 
-Important:
-- Do not replace or reset the Neon database.
-- Do not change DATABASE_URL or JWT_SECRET.
-- After deployment, open Administration > Professeurs > Affectations and remove the incorrect Aide-soignant(e) assignment from Olgy Pierre Louis. Keep Anglais. The removal affects only that teacher's assignment.
-- Test one small MP3/WAV (8 MB max), one PDF, and a hosted video URL. Direct video/document uploads remain limited by the application's request-size constraints; use hosted links for large files.
+Déploiement :
+1. Remplacer les quatre fichiers aux chemins indiqués.
+2. Commit sur la branche main.
+3. Attendre que Render affiche "Your service is live" pour le nouveau commit.
+4. Tester la connexion professeur, les formations affichées, un petit fichier audio, un petit fichier vidéo et un PDF.
+5. Vérifier dans l'administration que Olgy Pierre Louis n'a plus que l'affectation Anglais.
+
+Sécurité des données :
+- Ne pas remplacer, supprimer ou réinitialiser la base Neon.
+- Ne pas modifier DATABASE_URL ni JWT_SECRET.
+- La migration est idempotente et utilise une clé de migration dédiée.
+- Aucun étudiant, paiement, certificat, professeur, programme ou progrès étudiant n'est supprimé par cette migration.

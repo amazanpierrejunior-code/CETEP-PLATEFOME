@@ -663,6 +663,38 @@ function applyEnglishCanonicalMigration(){
   const result=tx(); if(result.applied) console.log('[CETEP ENGLISH v15.6.2]',result); return result;
 }
 
+// v15.6.3 — nettoie les affectations du professeur ciblé et archive les modules anglais doublons.
+// Aucun étudiant, paiement, certificat, leçon ou progrès n'est supprimé.
+function applyTeacherMediaAdminCleanupMigration(){
+  const key='cetep_teacher_media_admin_cleanup_v1563';
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
+  const tx=db.transaction(()=>{
+    const teacher=db.prepare("SELECT id FROM teachers WHERE teacher_no='PROF-2026-0001' LIMIT 1").get();
+    let removedAssignments=0;
+    if(teacher){
+      removedAssignments=db.prepare(`DELETE FROM program_teachers WHERE teacher_id=? AND program_id IN
+        (SELECT id FROM programs WHERE lower(trim(name)) IN ('aide-soignant(e)','aide soignant(e)','aide-soignant','aide soignant'))`).run(teacher.id).changes;
+    }
+    const program=db.prepare("SELECT id FROM programs WHERE lower(trim(name))='anglais' AND active=1 ORDER BY id LIMIT 1").get();
+    let archivedDuplicateModules=0;
+    if(program){
+      const canonical=['Level A — Beginner','Level B — Elementary','Level C — Intermediate','Level D — Advanced'];
+      // Archive every non-canonical active English module, including legacy A and D variants.
+      // Keep its lessons and their progress in the database for administrative recovery.
+      const active=db.prepare('SELECT id,title FROM modules WHERE program_id=? AND active=1').all(program.id);
+      for(const m of active){
+        if(!canonical.some(t=>t.toLowerCase()===String(m.title||'').trim().toLowerCase())){
+          archivedDuplicateModules+=db.prepare('UPDATE modules SET active=0 WHERE id=? AND active=1').run(m.id).changes;
+        }
+      }
+      canonical.forEach((title,index)=>db.prepare('UPDATE modules SET active=1,order_no=? WHERE program_id=? AND lower(trim(title))=lower(trim(?))').run(index+1,program.id,title));
+    }
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
+    return {applied:true,teacher_id:teacher?Number(teacher.id):null,removed_aide_soignant_assignments:removedAssignments,english_program_id:program?Number(program.id):null,archived_duplicate_english_modules:archivedDuplicateModules};
+  });
+  const result=tx(); if(result.applied) console.log('[CETEP v15.6.3 CLEANUP]',result); return result;
+}
+
 // Promotions CETEP par défaut : elles sont ajoutées automatiquement sans supprimer
 // les publications déjà présentes. L'administrateur peut ensuite les modifier ou les supprimer.
 const defaultPromotions=[
@@ -1291,7 +1323,7 @@ app.post('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
   const type=['Texte','Vidéo','Audio','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';
   if(type==='Classe en ligne'&&!String(b.meeting_url||'').trim())return res.status(400).json({error:'Le lien de la classe en ligne est obligatoire.'});
   if(type==='Audio'&&!String(b.file_url||'').trim())return res.status(400).json({error:'Ajoutez un fichier audio MP3/WAV ou un lien audio.'});
-  if(String(b.file_url||'').length>12500000||String(b.video_url||'').length>12500000)return res.status(413).json({error:'Fichier trop volumineux. Limite d’importation : 8 Mo. Utilisez un lien externe pour les fichiers plus lourds.'});
+  if(String(b.file_url||'').length>17000000||String(b.video_url||'').length>17000000)return res.status(413).json({error:'Fichier trop volumineux. Limite d’importation : 12 Mo. Utilisez un lien externe pour les fichiers plus lourds.'});
   const r=db.prepare(`INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no,created_by_role,created_by,teacher_editable)
     VALUES(?,?,?,?,?,?,?,?,?,?, 'teacher', ?,1)`).run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)),t.id);
   res.status(201).json({ok:true,id:r.lastInsertRowid});
@@ -1325,15 +1357,15 @@ app.put('/api/teacher/lessons/:id',auth,role('teacher'),(req,res)=>{
 app.get('/api/admin/modules',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT m.*,p.name program_name FROM modules m JOIN programs p ON p.id=m.program_id ORDER BY p.id,m.order_no,m.id').all()));
 app.post('/api/admin/modules',auth,role('admin'),(req,res)=>{const b=req.body||{},programId=Number(b.program_id),title=String(b.title||'').trim();if(!programId||!title)return res.status(400).json({error:'Formation et titre obligatoires'});if(!db.prepare('SELECT 1 FROM programs WHERE id=?').get(programId))return res.status(400).json({error:'Formation introuvable'});const r=db.prepare('INSERT INTO modules(program_id,title,description,order_no) VALUES(?,?,?,?)').run(programId,title,String(b.description||''),Math.max(1,Number(b.order_no||1)));res.status(201).json({ok:true,id:r.lastInsertRowid});});
 app.put('/api/admin/modules/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},id=Number(req.params.id),title=String(b.title||'').trim();if(!title)return res.status(400).json({error:'Titre du module obligatoire'});const row=db.prepare('SELECT id FROM modules WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Module introuvable'});db.prepare('UPDATE modules SET title=?,description=?,order_no=? WHERE id=?').run(title,String(b.description||''),Math.max(1,Number(b.order_no||1)),id);res.json({ok:true});});
-app.delete('/api/admin/modules/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),row=db.prepare('SELECT id FROM modules WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Module introuvable'});const lessons=db.prepare('SELECT COUNT(*) c FROM lessons WHERE module_id=?').get(id).c;if(lessons)return res.status(409).json({error:`Ce module contient ${lessons} leçon(s). Supprimez ou déplacez d’abord les leçons.`});db.prepare('DELETE FROM modules WHERE id=?').run(id);res.json({ok:true});});
+app.delete('/api/admin/modules/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),row=db.prepare('SELECT id FROM modules WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Module introuvable'});db.prepare('UPDATE modules SET active=0 WHERE id=?').run(id);res.json({ok:true,archived:true,message:'Module archivé. Les leçons et la progression des étudiants sont conservées.'});});
 app.get('/api/admin/lessons',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT l.*,m.title module_title,p.name program_name FROM lessons l JOIN modules m ON m.id=l.module_id JOIN programs p ON p.id=m.program_id ORDER BY p.id,m.order_no,l.order_no,l.id').all()));
 app.post('/api/admin/lessons',auth,role('admin'),(req,res)=>{const b=req.body||{},moduleId=Number(b.module_id),title=String(b.title||'').trim();if(!moduleId||!title)return res.status(400).json({error:'Module et titre obligatoires'});if(!db.prepare('SELECT 1 FROM modules WHERE id=?').get(moduleId))return res.status(400).json({error:'Module introuvable'});const type=['Texte','Vidéo','Audio','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';if(type==='Classe en ligne'&&!String(b.meeting_url||'').trim())return res.status(400).json({error:'Le lien de la classe en ligne est obligatoire.'});
   if(type==='Audio'&&!String(b.file_url||'').trim())return res.status(400).json({error:'Ajoutez un fichier audio MP3/WAV ou un lien audio.'});
-  if(String(b.file_url||'').length>12500000||String(b.video_url||'').length>12500000)return res.status(413).json({error:'Fichier trop volumineux. Limite d’importation : 8 Mo. Utilisez un lien externe pour les fichiers plus lourds.'});const r=db.prepare('INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no) VALUES(?,?,?,?,?,?,?,?,?,?)').run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)));res.status(201).json({ok:true,id:r.lastInsertRowid});});
+  if(String(b.file_url||'').length>17000000||String(b.video_url||'').length>17000000)return res.status(413).json({error:'Fichier trop volumineux. Limite d’importation : 12 Mo. Utilisez un lien externe pour les fichiers plus lourds.'});const r=db.prepare('INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no) VALUES(?,?,?,?,?,?,?,?,?,?)').run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)));res.status(201).json({ok:true,id:r.lastInsertRowid});});
 app.put('/api/admin/lessons/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},id=Number(req.params.id),title=String(b.title||'').trim();if(!title)return res.status(400).json({error:'Titre de la leçon obligatoire'});const row=db.prepare('SELECT id FROM lessons WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Leçon introuvable'});const type=['Texte','Vidéo','Audio','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';if(type==='Classe en ligne'&&!String(b.meeting_url||'').trim())return res.status(400).json({error:'Le lien de la classe en ligne est obligatoire.'});
   if(type==='Audio'&&!String(b.file_url||'').trim())return res.status(400).json({error:'Ajoutez un fichier audio MP3/WAV ou un lien audio.'});
-  if(String(b.file_url||'').length>12500000||String(b.video_url||'').length>12500000)return res.status(413).json({error:'Fichier trop volumineux. Limite d’importation : 8 Mo. Utilisez un lien externe pour les fichiers plus lourds.'});db.prepare('UPDATE lessons SET title=?,type=?,content=?,video_url=?,file_url=?,meeting_url=?,scheduled_at=?,duration_minutes=?,order_no=? WHERE id=?').run(title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)),id);res.json({ok:true});});
-app.delete('/api/admin/lessons/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),row=db.prepare('SELECT id FROM lessons WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Leçon introuvable'});db.prepare('DELETE FROM lessons WHERE id=?').run(id);res.json({ok:true});});
+  if(String(b.file_url||'').length>17000000||String(b.video_url||'').length>17000000)return res.status(413).json({error:'Fichier trop volumineux. Limite d’importation : 12 Mo. Utilisez un lien externe pour les fichiers plus lourds.'});db.prepare('UPDATE lessons SET title=?,type=?,content=?,video_url=?,file_url=?,meeting_url=?,scheduled_at=?,duration_minutes=?,order_no=? WHERE id=?').run(title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)),id);res.json({ok:true});});
+app.delete('/api/admin/lessons/:id',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),row=db.prepare('SELECT id FROM lessons WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Leçon introuvable'});db.prepare('UPDATE lessons SET active=0 WHERE id=?').run(id);res.json({ok:true,archived:true,message:'Leçon archivée. Les historiques et la progression sont conservés.'});});
 app.post('/api/admin/assign-teacher',auth,role('admin'),(req,res)=>{db.prepare('INSERT OR IGNORE INTO program_teachers(program_id,teacher_id) VALUES(?,?)').run(Number(req.body.program_id),Number(req.body.teacher_id));res.json({ok:true});});
 app.delete('/api/admin/teacher-assignments/:teacherId/:programId',auth,role('admin'),(req,res)=>{const teacherId=Number(req.params.teacherId),programId=Number(req.params.programId);const result=db.prepare('DELETE FROM program_teachers WHERE teacher_id=? AND program_id=?').run(teacherId,programId);res.json({ok:true,removed:result.changes});});app.get('/api/admin/teacher-assignments',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT pt.*,t.name teacher_name,p.name program_name FROM program_teachers pt JOIN teachers t ON t.id=pt.teacher_id JOIN programs p ON p.id=pt.program_id').all()));
 app.get('/api/admin/payments',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT p.*,s.name student_name,s.student_no,e.access_enabled program_access_enabled,pr.name program_name FROM payments p LEFT JOIN students s ON s.id=p.student_id LEFT JOIN programs pr ON pr.id=COALESCE(p.program_id,s.program_id) LEFT JOIN enrollments e ON e.student_id=p.student_id AND e.program_id=COALESCE(p.program_id,s.program_id) ORDER BY p.id DESC').all()));app.get('/api/admin/payments/:id/proof',auth,role('admin'),(req,res)=>{const p=db.prepare('SELECT payment_proof FROM payments WHERE id=?').get(Number(req.params.id));if(!p||!p.payment_proof)return res.status(404).send('Confirmation introuvable');const m=String(p.payment_proof).match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);if(!m)return res.status(415).send('Format de confirmation non pris en charge');res.setHeader('Content-Type',m[1]);res.setHeader('Cache-Control','private, max-age=60');res.send(Buffer.from(m[2],'base64'));});app.put('/api/admin/payments/:id/month',auth,role('admin'),(req,res)=>{const id=Number(req.params.id),month=String(req.body.billing_month||'').trim();if(month&&!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return res.status(400).json({error:'Mois de paiement invalide.'});const row=db.prepare('SELECT id FROM payments WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Paiement introuvable'});db.prepare('UPDATE payments SET billing_month=? WHERE id=?').run(month||null,id);res.json({ok:true,billing_month:month||null});});
@@ -1900,7 +1932,8 @@ async function startCETEP(){
   const englishLevelAMigration=applyEnglishLevelAMigration();
   const english200Migration=applyEnglish200CourseMigration();
   const englishCanonicalMigration=applyEnglishCanonicalMigration();
-  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied || english200Migration.applied || englishCanonicalMigration.applied)){
+  const teacherMediaCleanupMigration=applyTeacherMediaAdminCleanupMigration();
+  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied || english200Migration.applied || englishCanonicalMigration.applied || teacherMediaCleanupMigration.applied)){
     await flushNeonSnapshot();
     console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
   }
