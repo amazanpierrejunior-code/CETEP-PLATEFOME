@@ -1,0 +1,14 @@
+CETEP v15.6.1 — ENGLISH ENROLLMENT FIX
+
+Corrections:
+- The dedicated “Anglais” enrollment is prioritized in the student portal.
+- When a student has both the legacy combined “Anglais, Espagnol” enrollment and the dedicated “Anglais” enrollment, the legacy combined option is hidden from that student's course selector. Historical enrollment, payment, certificate and database records are not deleted.
+- The English course heading now clearly identifies the 4-level / 200-lesson program.
+- The 200-lesson migration fills missing lesson order positions rather than relying only on row counts, preserving existing lessons and avoiding skipped positions.
+- Levels E and F remain archived/inactive; no student/payment/certificate data is reset.
+
+Deployment safety:
+- Do NOT reset or delete the production database.
+- Keep DATABASE_URL and JWT_SECRET unchanged.
+- Take a database backup before deployment.
+- This package has not been deployed to Render.

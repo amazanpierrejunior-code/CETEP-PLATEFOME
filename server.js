@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.0-english-200-lessons';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.1-english-enrollment-fix';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -601,14 +601,16 @@ function applyEnglish200CourseMigration(){
       const level=catalog.levels[n];
       let module=findModule.get(program.id,level.title);
       if(!module){const r=addModule.run(program.id,level.title,level.description,n+1);module={id:Number(r.lastInsertRowid)};modules++;}
-      let current=Number(countLessons.get(module.id).c||0);
+      // Preserve every existing lesson and fill missing lesson positions by order number.
+      // Counting rows alone is unsafe when a module contains gaps or older lesson titles.
+      const occupied=new Set(db.prepare('SELECT order_no FROM lessons WHERE module_id=? AND active=1').all(module.id).map(x=>Number(x.order_no)));
+      const findTitle=db.prepare('SELECT id FROM lessons WHERE module_id=? AND title=? LIMIT 1');
       for(const lesson of level.lessons){
-        // Existing lessons occupy their original positions; fill only the missing positions.
-        if(Number(lesson.order)<=current) continue;
-        const existing=db.prepare('SELECT id FROM lessons WHERE module_id=? AND title=? LIMIT 1').get(module.id,lesson.title);
-        if(existing) continue;
-        addLesson.run(module.id,lesson.title,lesson.content,lesson.order);
-        current++;added++;
+        if(findTitle.get(module.id,lesson.title)) continue;
+        const position=Number(lesson.order);
+        if(occupied.has(position)) continue; // preserve an existing lesson in this position
+        addLesson.run(module.id,lesson.title,lesson.content,position);
+        occupied.add(position);added++;
       }
       db.prepare('UPDATE modules SET active=1,order_no=? WHERE id=?').run(n+1,module.id);
     }
