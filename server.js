@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.3-teacher-media-admin-controls';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.4-english-lesson-a01';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -693,6 +693,28 @@ function applyTeacherMediaAdminCleanupMigration(){
     return {applied:true,teacher_id:teacher?Number(teacher.id):null,removed_aide_soignant_assignments:removedAssignments,english_program_id:program?Number(program.id):null,archived_duplicate_english_modules:archivedDuplicateModules};
   });
   const result=tx(); if(result.applied) console.log('[CETEP v15.6.3 CLEANUP]',result); return result;
+}
+
+// v15.6.4 — Publie le contenu pédagogique complet de la première leçon CETEP English.
+// Mise à jour ciblée du texte uniquement: les médias, IDs et progrès sont conservés.
+function applyEnglishLessonA01Migration(){
+  const key='cetep_english_lesson_a01_content_v1564';
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
+  const catalog=JSON.parse(fs.readFileSync(path.join(__dirname,'english-curriculum-200.json'),'utf8'));
+  const lesson=catalog.levels?.[0]?.lessons?.[0];
+  if(!lesson || !String(lesson.title).startsWith('A01')) throw new Error('Leçon A01 absente du catalogue CETEP English.');
+  const tx=db.transaction(()=>{
+    const program=db.prepare("SELECT id FROM programs WHERE lower(trim(name))='anglais' AND active=1 ORDER BY id LIMIT 1").get();
+    if(!program) return {applied:false,missingProgram:true};
+    const row=db.prepare(`SELECT l.id FROM lessons l JOIN modules m ON m.id=l.module_id
+      WHERE m.program_id=? AND m.title='Level A — Beginner' AND lower(trim(l.title))=lower(trim(?))
+      ORDER BY l.id LIMIT 1`).get(program.id,lesson.title);
+    if(!row) return {applied:false,missingLesson:true};
+    db.prepare('UPDATE lessons SET content=? WHERE id=?').run(lesson.content,row.id);
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
+    return {applied:true,lesson_id:Number(row.id),title:lesson.title};
+  });
+  const result=tx(); if(result.applied) console.log('[CETEP ENGLISH v15.6.4] Leçon A01 enrichie:',result); return result;
 }
 
 // Promotions CETEP par défaut : elles sont ajoutées automatiquement sans supprimer
@@ -1933,7 +1955,8 @@ async function startCETEP(){
   const english200Migration=applyEnglish200CourseMigration();
   const englishCanonicalMigration=applyEnglishCanonicalMigration();
   const teacherMediaCleanupMigration=applyTeacherMediaAdminCleanupMigration();
-  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied || english200Migration.applied || englishCanonicalMigration.applied || teacherMediaCleanupMigration.applied)){
+  const englishLessonA01Migration=applyEnglishLessonA01Migration();
+  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied || english200Migration.applied || englishCanonicalMigration.applied || teacherMediaCleanupMigration.applied || englishLessonA01Migration.applied)){
     await flushNeonSnapshot();
     console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
   }
