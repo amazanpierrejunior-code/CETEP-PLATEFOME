@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.4-english-lesson-a01';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.4-teacher-approval-american-english';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -138,6 +138,10 @@ CREATE TABLE IF NOT EXISTS academic_subjects(
  subject_code TEXT, coefficient REAL NOT NULL DEFAULT 1, active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
  UNIQUE(program_id,subject_name), FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS teacher_publication_audit(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, lesson_id INTEGER NOT NULL, teacher_id INTEGER, admin_id INTEGER,
+ action TEXT NOT NULL, note TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS academic_grades(
  id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL, program_id INTEGER NOT NULL,
  subject_id INTEGER NOT NULL, term_id INTEGER NOT NULL, intra_score REAL NOT NULL DEFAULT 0,
@@ -163,6 +167,7 @@ ensureColumn('announcements','sent_count','INTEGER DEFAULT 0');
 ensureColumn('lessons','meeting_url','TEXT');
 ensureColumn('lessons','scheduled_at','TEXT');
 ensureColumn('lessons','duration_minutes','INTEGER DEFAULT 60');
+ensureColumn('lessons','publication_status',"TEXT NOT NULL DEFAULT 'Approuve'");
 ensureColumn('students','certificate_name','TEXT');
 ensureColumn('students','nif','TEXT');
 ensureColumn('students','cin','TEXT');
@@ -695,28 +700,6 @@ function applyTeacherMediaAdminCleanupMigration(){
   const result=tx(); if(result.applied) console.log('[CETEP v15.6.3 CLEANUP]',result); return result;
 }
 
-// v15.6.4 — Publie le contenu pédagogique complet de la première leçon CETEP English.
-// Mise à jour ciblée du texte uniquement: les médias, IDs et progrès sont conservés.
-function applyEnglishLessonA01Migration(){
-  const key='cetep_english_lesson_a01_content_v1564';
-  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
-  const catalog=JSON.parse(fs.readFileSync(path.join(__dirname,'english-curriculum-200.json'),'utf8'));
-  const lesson=catalog.levels?.[0]?.lessons?.[0];
-  if(!lesson || !String(lesson.title).startsWith('A01')) throw new Error('Leçon A01 absente du catalogue CETEP English.');
-  const tx=db.transaction(()=>{
-    const program=db.prepare("SELECT id FROM programs WHERE lower(trim(name))='anglais' AND active=1 ORDER BY id LIMIT 1").get();
-    if(!program) return {applied:false,missingProgram:true};
-    const row=db.prepare(`SELECT l.id FROM lessons l JOIN modules m ON m.id=l.module_id
-      WHERE m.program_id=? AND m.title='Level A — Beginner' AND lower(trim(l.title))=lower(trim(?))
-      ORDER BY l.id LIMIT 1`).get(program.id,lesson.title);
-    if(!row) return {applied:false,missingLesson:true};
-    db.prepare('UPDATE lessons SET content=? WHERE id=?').run(lesson.content,row.id);
-    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
-    return {applied:true,lesson_id:Number(row.id),title:lesson.title};
-  });
-  const result=tx(); if(result.applied) console.log('[CETEP ENGLISH v15.6.4] Leçon A01 enrichie:',result); return result;
-}
-
 // Promotions CETEP par défaut : elles sont ajoutées automatiquement sans supprimer
 // les publications déjà présentes. L'administrateur peut ensuite les modifier ou les supprimer.
 const defaultPromotions=[
@@ -827,8 +810,8 @@ function certificateNo(){
   return x;
 }
 function completionStats(studentId,programId){
-  const total=db.prepare(`SELECT COUNT(*) c FROM modules m JOIN lessons l ON l.module_id=m.id WHERE m.program_id=? AND m.active=1 AND l.active=1`).get(programId).c;
-  const done=db.prepare(`SELECT COUNT(*) c FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id JOIN modules m ON m.id=l.module_id WHERE lp.student_id=? AND m.program_id=? AND m.active=1 AND l.active=1 AND lp.completed=1`).get(studentId,programId).c;
+  const total=db.prepare(`SELECT COUNT(*) c FROM modules m JOIN lessons l ON l.module_id=m.id WHERE m.program_id=? AND m.active=1 AND l.active=1 AND (l.created_by_role!='teacher' OR l.publication_status='Approuve')`).get(programId).c;
+  const done=db.prepare(`SELECT COUNT(*) c FROM lesson_progress lp JOIN lessons l ON l.id=lp.lesson_id JOIN modules m ON m.id=l.module_id WHERE lp.student_id=? AND m.program_id=? AND m.active=1 AND l.active=1 AND (l.created_by_role!='teacher' OR l.publication_status='Approuve') AND lp.completed=1`).get(studentId,programId).c;
   // Aucun contenu publié ne signifie PAS que l'étudiant a terminé la formation.
   // Il faut au moins une leçon active publiée et toutes ces leçons terminées.
   return {total,done,percent:total>0?Math.min(100,Math.round(done*100/total)):0};
@@ -1322,18 +1305,7 @@ app.get('/api/teacher/modules',auth,role('teacher'),(req,res)=>{
     JOIN programs p ON p.id=m.program_id JOIN program_teachers pt ON pt.program_id=p.id
     WHERE pt.teacher_id=? AND p.active=1 AND m.active=1 ORDER BY p.name,m.order_no,m.id`).all(t.id));
 });
-app.post('/api/teacher/modules',auth,role('teacher'),(req,res)=>{
-  const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
-  if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
-  const b=req.body||{},programId=Number(b.program_id),title=String(b.title||'').trim();
-  if(!programId||!title)return res.status(400).json({error:'Formation et titre du module obligatoires.'});
-  const allowed=db.prepare(`SELECT p.id FROM programs p JOIN program_teachers pt ON pt.program_id=p.id
-    WHERE p.id=? AND pt.teacher_id=? AND p.active=1`).get(programId,t.id);
-  if(!allowed)return res.status(403).json({error:'Cette formation ne vous est pas affectée.'});
-  const r=db.prepare('INSERT INTO modules(program_id,title,description,order_no) VALUES(?,?,?,?)')
-    .run(programId,title,String(b.description||''),Math.max(1,Number(b.order_no||1)));
-  res.status(201).json({ok:true,id:r.lastInsertRowid});
-});
+app.post('/api/teacher/modules',auth,role('teacher'),(req,res)=>res.status(403).json({error:'Seule l’administration peut créer ou modifier les modules. Choisissez un module existant.'}));
 app.post('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
   const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
   if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
@@ -1346,8 +1318,8 @@ app.post('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
   if(type==='Classe en ligne'&&!String(b.meeting_url||'').trim())return res.status(400).json({error:'Le lien de la classe en ligne est obligatoire.'});
   if(type==='Audio'&&!String(b.file_url||'').trim())return res.status(400).json({error:'Ajoutez un fichier audio MP3/WAV ou un lien audio.'});
   if(String(b.file_url||'').length>17000000||String(b.video_url||'').length>17000000)return res.status(413).json({error:'Fichier trop volumineux. Limite d’importation : 12 Mo. Utilisez un lien externe pour les fichiers plus lourds.'});
-  const r=db.prepare(`INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no,created_by_role,created_by,teacher_editable)
-    VALUES(?,?,?,?,?,?,?,?,?,?, 'teacher', ?,1)`).run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)),t.id);
+  const r=db.prepare(`INSERT INTO lessons(module_id,title,type,content,video_url,file_url,meeting_url,scheduled_at,duration_minutes,order_no,created_by_role,created_by,teacher_editable,publication_status)
+    VALUES(?,?,?,?,?,?,?,?,?,?, 'teacher', ?,1,'En attente')`).run(moduleId,title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),String(b.meeting_url||''),b.scheduled_at||null,Math.max(1,Number(b.duration_minutes||60)),Math.max(1,Number(b.order_no||1)),t.id);
   res.status(201).json({ok:true,id:r.lastInsertRowid});
 });
 app.get('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
@@ -1358,7 +1330,7 @@ app.get('/api/teacher/lessons',auth,role('teacher'),(req,res)=>{
   const allowed=db.prepare(`SELECT m.id FROM modules m JOIN program_teachers pt ON pt.program_id=m.program_id
     JOIN programs p ON p.id=m.program_id WHERE m.id=? AND pt.teacher_id=? AND p.active=1 AND m.active=1`).get(moduleId,t.id);
   if(!allowed)return res.status(403).json({error:'Ce module ne fait pas partie de vos formations affectées.'});
-  res.json(db.prepare(`SELECT id,module_id,title,type,content,video_url,file_url,order_no,created_by_role,teacher_editable
+  res.json(db.prepare(`SELECT id,module_id,title,type,content,video_url,file_url,order_no,created_by_role,teacher_editable,publication_status
     FROM lessons WHERE module_id=? AND active=1 AND created_by_role='teacher' AND created_by=? ORDER BY order_no,id`).all(moduleId,t.id));
 });
 app.put('/api/teacher/lessons/:id',auth,role('teacher'),(req,res)=>{
@@ -1372,10 +1344,28 @@ app.put('/api/teacher/lessons/:id',auth,role('teacher'),(req,res)=>{
   if(!lesson)return res.status(403).json({error:'Cette leçon est protégée ou ne vous appartient pas. Seul l’administrateur peut la modifier.'});
   if(!title)return res.status(400).json({error:'Titre de la leçon obligatoire.'});
   const type=['Texte','Vidéo','Audio','PDF','Classe en ligne'].includes(b.type)?b.type:'Texte';
-  db.prepare('UPDATE lessons SET title=?,type=?,content=?,video_url=?,file_url=?,order_no=? WHERE id=?').run(title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),Math.max(1,Number(b.order_no||1)),id);
+  db.prepare("UPDATE lessons SET title=?,type=?,content=?,video_url=?,file_url=?,order_no=?,publication_status='En attente' WHERE id=?").run(title,type,String(b.content||''),String(b.video_url||''),String(b.file_url||''),Math.max(1,Number(b.order_no||1)),id);
   res.json({ok:true});
 });
 
+app.get('/api/admin/teacher-publications',auth,role('admin'),(req,res)=>{
+  const rows=db.prepare(`SELECT l.id,l.module_id,l.title,l.type,l.content,l.video_url,l.file_url,l.meeting_url,l.scheduled_at,l.duration_minutes,l.order_no,l.publication_status,
+    t.name teacher_name,t.teacher_no,p.name program_name,m.title module_title
+    FROM lessons l JOIN modules m ON m.id=l.module_id JOIN programs p ON p.id=m.program_id
+    LEFT JOIN teachers t ON t.id=l.created_by
+    WHERE l.created_by_role='teacher' AND l.active=1
+    ORDER BY CASE l.publication_status WHEN 'En attente' THEN 0 WHEN 'Refuse' THEN 2 ELSE 1 END,l.id DESC`).all();
+  res.json(rows);
+});
+app.post('/api/admin/teacher-publications/:id/decision',auth,role('admin'),(req,res)=>{
+  const id=Number(req.params.id),decision=String(req.body?.decision||''),note=String(req.body?.note||'').slice(0,1000);
+  if(!['Approuve','Refuse','En attente'].includes(decision))return res.status(400).json({error:'Décision invalide.'});
+  const row=db.prepare("SELECT id,created_by FROM lessons WHERE id=? AND created_by_role='teacher'").get(id);
+  if(!row)return res.status(404).json({error:'Publication professeur introuvable.'});
+  db.prepare('UPDATE lessons SET publication_status=? WHERE id=?').run(decision,id);
+  db.prepare('INSERT INTO teacher_publication_audit(lesson_id,teacher_id,admin_id,action,note) VALUES(?,?,?,?,?)').run(id,row.created_by,req.user.id,decision,note||null);
+  res.json({ok:true,status:decision});
+});
 app.get('/api/admin/modules',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT m.*,p.name program_name FROM modules m JOIN programs p ON p.id=m.program_id ORDER BY p.id,m.order_no,m.id').all()));
 app.post('/api/admin/modules',auth,role('admin'),(req,res)=>{const b=req.body||{},programId=Number(b.program_id),title=String(b.title||'').trim();if(!programId||!title)return res.status(400).json({error:'Formation et titre obligatoires'});if(!db.prepare('SELECT 1 FROM programs WHERE id=?').get(programId))return res.status(400).json({error:'Formation introuvable'});const r=db.prepare('INSERT INTO modules(program_id,title,description,order_no) VALUES(?,?,?,?)').run(programId,title,String(b.description||''),Math.max(1,Number(b.order_no||1)));res.status(201).json({ok:true,id:r.lastInsertRowid});});
 app.put('/api/admin/modules/:id',auth,role('admin'),(req,res)=>{const b=req.body||{},id=Number(req.params.id),title=String(b.title||'').trim();if(!title)return res.status(400).json({error:'Titre du module obligatoire'});const row=db.prepare('SELECT id FROM modules WHERE id=?').get(id);if(!row)return res.status(404).json({error:'Module introuvable'});db.prepare('UPDATE modules SET title=?,description=?,order_no=? WHERE id=?').run(title,String(b.description||''),Math.max(1,Number(b.order_no||1)),id);res.json({ok:true});});
@@ -1397,7 +1387,7 @@ app.get('/api/admin/donations',auth,role('admin'),(req,res)=>res.json(db.prepare
 app.get('/api/admin/gallery',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM gallery ORDER BY sort_order,id DESC').all()));app.post('/api/admin/gallery',auth,role('admin'),(req,res)=>{const b=req.body;if(!b.title||!b.image_url)return res.status(400).json({error:'Titre et photo obligatoires'});if(String(b.image_url).length>7000000)return res.status(400).json({error:'Photo trop grande. Maximum recommandé: 5 Mo.'});const r=db.prepare('INSERT INTO gallery(title,description,image_url,sort_order,active) VALUES(?,?,?,?,?)').run(b.title,b.description||'',b.image_url,Number(b.sort_order||99),b.active===false?0:1);res.json({ok:true,id:r.lastInsertRowid});});app.put('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{const b=req.body;db.prepare('UPDATE gallery SET title=?,description=?,image_url=?,sort_order=?,active=? WHERE id=?').run(b.title,b.description||'',b.image_url,b.sort_order||99,b.active===false?0:1,req.params.id);res.json({ok:true});});app.delete('/api/admin/gallery/:id',auth,role('admin'),(req,res)=>{db.prepare('DELETE FROM gallery WHERE id=?').run(req.params.id);res.json({ok:true});});
 // CETEP Local ↔ Online snapshot: keeps a complete administrative copy on the local device.
 app.get('/api/admin/local-snapshot',auth,role('admin'),(req,res)=>{
-  const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','certificate_admin_audit','attendance','announcements','student_notifications','communication_audit','role_permissions','gallery'];
+  const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','teacher_publication_audit','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','certificate_admin_audit','attendance','announcements','student_notifications','communication_audit','role_permissions','gallery'];
   const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};
   for(const t of tables) out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();
   res.json(out);
@@ -1452,8 +1442,8 @@ app.post('/api/admin/local-sync',auth,role('admin'),(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','secretariat_audit','student_policy','student_policy_acceptances','certificate_admin_audit','communication_audit','role_permissions','student_notifications','programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v15.4.0.json"');res.send(JSON.stringify(out,null,2));});
-app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const row of rows){const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();db.prepare("UPDATE payments SET program_id=(SELECT program_id FROM students WHERE students.id=payments.student_id) WHERE program_id IS NULL").run();db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id,CASE WHEN status='Actif' THEN 'Actif' ELSE COALESCE(status,'En attente') END,CASE WHEN access_enabled=1 THEN 1 ELSE 0 END FROM students WHERE program_id IS NOT NULL").run();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
+app.get('/api/admin/backup',auth,role('admin'),(req,res)=>{const tables=['admins','secretariat_audit','student_policy','student_policy_acceptances','certificate_admin_audit','communication_audit','role_permissions','student_notifications','programs','students','teachers','program_teachers','enrollments','modules','lessons','teacher_publication_audit','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const out={version:APP_VERSION,created_at:new Date().toISOString(),tables:{}};for(const t of tables)out.tables[t]=db.prepare(`SELECT * FROM ${t}`).all();res.setHeader('Content-Type','application/json');res.setHeader('Content-Disposition','attachment; filename="cetep-backup-v15.6.4.json"');res.send(JSON.stringify(out,null,2));});
+app.post('/api/admin/restore',auth,role('admin'),(req,res)=>{try{const data=req.body;if(!data?.tables)throw new Error('Fichier de sauvegarde invalide');const tables=['programs','students','teachers','program_teachers','enrollments','modules','lessons','teacher_publication_audit','lesson_progress','assignments','submissions','payments','support_methods','donations','settings','final_results','certificates','attendance','announcements','gallery','academic_terms','academic_subjects','academic_grades'];const tx=db.transaction(()=>{db.pragma('foreign_keys=OFF');for(const t of tables)db.prepare(`DELETE FROM ${t}`).run();for(const t of tables){const rows=data.tables[t]||[];for(const sourceRow of rows){const row={...sourceRow};if(t==='lessons'&&!Object.prototype.hasOwnProperty.call(row,'publication_status')&&row.created_by_role==='teacher')row.publication_status='En attente';const cols=Object.keys(row);const sql=`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(()=>'?').join(',')})`;db.prepare(sql).run(...cols.map(c=>row[c]));}}db.pragma('foreign_keys=ON');});tx();db.prepare("UPDATE payments SET program_id=(SELECT program_id FROM students WHERE students.id=payments.student_id) WHERE program_id IS NULL").run();db.prepare("INSERT OR IGNORE INTO enrollments(student_id,program_id,status,access_enabled) SELECT id,program_id,CASE WHEN status='Actif' THEN 'Actif' ELSE COALESCE(status,'En attente') END,CASE WHEN access_enabled=1 THEN 1 ELSE 0 END FROM students WHERE program_id IS NOT NULL").run();res.json({ok:true,message:'Sauvegarde restaurée.'});}catch(e){res.status(400).json({error:e.message});}});
 
 // Certificates & academic results
 // Academic administration: flexible number of terms per program and academic year.
@@ -1568,7 +1558,7 @@ app.get('/api/student/content',auth,role('student'),(req,res)=>{
  const enrollment=db.prepare("SELECT e.program_id,p.name FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? AND e.program_id=? AND e.status='Actif' AND e.access_enabled=1").get(sid,requestedPid);
  if(!enrollment)return res.status(403).json({error:'Accès non autorisé à cette formation.'});
  const contentPid=requestedPid;
- const rows=db.prepare(`SELECT m.id module_id,m.title module_title,l.id lesson_id,l.title lesson_title,l.type,l.content,l.video_url,l.file_url,l.meeting_url,l.scheduled_at,l.duration_minutes,COALESCE(lp.completed,0) completed FROM modules m JOIN lessons l ON l.module_id=m.id LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.student_id=? WHERE m.program_id=? AND m.active=1 AND l.active=1 ORDER BY m.order_no,l.order_no`).all(sid,contentPid);
+ const rows=db.prepare(`SELECT m.id module_id,m.title module_title,l.id lesson_id,l.title lesson_title,l.type,l.content,l.video_url,l.file_url,l.meeting_url,l.scheduled_at,l.duration_minutes,COALESCE(lp.completed,0) completed FROM modules m JOIN lessons l ON l.module_id=m.id LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.student_id=? WHERE m.program_id=? AND m.active=1 AND l.active=1 AND (l.created_by_role!='teacher' OR l.publication_status='Approuve') ORDER BY m.order_no,l.order_no`).all(sid,contentPid);
  res.json(rows);
 });
 app.get('/api/student/documents',auth,role('student'),(req,res)=>{
@@ -1791,7 +1781,7 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
   doc.end();
 }
 
-app.post('/api/student/progress',auth,role('student'),(req,res)=>{const lessonId=Number(req.body.lesson_id);const lesson=db.prepare('SELECT m.program_id FROM lessons l JOIN modules m ON m.id=l.module_id WHERE l.id=? AND l.active=1 AND m.active=1').get(lessonId);if(!lesson)return res.status(404).json({error:'Leçon introuvable'});let progressAuthorized=!!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(req.user.id,lesson.program_id);if(!progressAuthorized){const course=db.prepare("SELECT id FROM programs WHERE id=? AND (lower(name) LIKE '%english%casas%' OR lower(name) LIKE '%english%casas%')").get(lesson.program_id);if(course)progressAuthorized=!!db.prepare("SELECT 1 FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? AND e.status='Actif' AND e.access_enabled=1 AND lower(p.name) LIKE '%anglais%'").get(req.user.id);}if(!progressAuthorized)return res.status(403).json({error:'Accès non autorisé à cette formation'});db.prepare('INSERT INTO lesson_progress(student_id,lesson_id,completed,completed_at) VALUES(?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(student_id,lesson_id) DO UPDATE SET completed=1,completed_at=CURRENT_TIMESTAMP').run(req.user.id,lessonId);res.json({ok:true,certificate:autoCertificateForStudent(req.user.id,lesson.program_id)});});
+app.post('/api/student/progress',auth,role('student'),(req,res)=>{const lessonId=Number(req.body.lesson_id);const lesson=db.prepare(`SELECT m.program_id FROM lessons l JOIN modules m ON m.id=l.module_id WHERE l.id=? AND l.active=1 AND m.active=1 AND (l.created_by_role!='teacher' OR l.publication_status='Approuve')`).get(lessonId);if(!lesson)return res.status(404).json({error:'Leçon introuvable'});let progressAuthorized=!!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(req.user.id,lesson.program_id);if(!progressAuthorized){const course=db.prepare("SELECT id FROM programs WHERE id=? AND (lower(name) LIKE '%english%casas%' OR lower(name) LIKE '%english%casas%')").get(lesson.program_id);if(course)progressAuthorized=!!db.prepare("SELECT 1 FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? AND e.status='Actif' AND e.access_enabled=1 AND lower(p.name) LIKE '%anglais%'").get(req.user.id);}if(!progressAuthorized)return res.status(403).json({error:'Accès non autorisé à cette formation'});db.prepare('INSERT INTO lesson_progress(student_id,lesson_id,completed,completed_at) VALUES(?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(student_id,lesson_id) DO UPDATE SET completed=1,completed_at=CURRENT_TIMESTAMP').run(req.user.id,lessonId);res.json({ok:true,certificate:autoCertificateForStudent(req.user.id,lesson.program_id)});});
 app.use((req,res)=>{if(req.path.startsWith('/api/'))return res.status(404).json({error:'Route API introuvable',path:req.path});res.status(404).send('Page introuvable');});
 app.use((err,req,res,next)=>{console.error('CETEP ERROR',err);if(res.headersSent)return next(err);res.status(500).json({error:'Erreur interne du serveur'});});
 // SQLite remains the application query engine for compatibility, while Neon stores
@@ -1851,7 +1841,8 @@ async function restoreNeonSnapshot(snapshot){
     // Added in v15.5.3: preserve locally initialized student policy tables
     // when restoring an older Neon snapshot that predates the student rules.
     'student_policy',
-    'student_policy_acceptances'
+    'student_policy_acceptances',
+    'teacher_publication_audit'
   ];
 
   for (const name of backwardCompatibleTables) {
@@ -1919,6 +1910,24 @@ function installNeonWriteTracking(){
     }});
   };
 }
+function applyTeacherApprovalMigration(){
+  const key='cetep_teacher_approval_v1564';
+  const columns=new Set(db.prepare('PRAGMA table_info(lessons)').all().map(c=>c.name));
+  if(!columns.has('publication_status')) db.exec("ALTER TABLE lessons ADD COLUMN publication_status TEXT NOT NULL DEFAULT 'Approuve'");
+  db.exec(`CREATE TABLE IF NOT EXISTS teacher_publication_audit(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, lesson_id INTEGER NOT NULL, teacher_id INTEGER,
+    admin_id INTEGER, action TEXT NOT NULL, note TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`);
+  if(db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) return {applied:false};
+  const tx=db.transaction(()=>{
+    // One-time quarantine of old teacher posts; later administrator approvals are never reset on restart.
+    db.prepare("UPDATE lessons SET publication_status='En attente' WHERE created_by_role='teacher'").run();
+    db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(key,new Date().toISOString());
+  });
+  tx();
+  return {applied:true};
+}
+
 async function startCETEP(){
   if(IS_PRODUCTION&&!neonSql)throw new Error('DATABASE_URL manquant: configurez la connexion Neon dans Render avant de démarrer CETEP en production.');
   if(neonSql){
@@ -1955,8 +1964,8 @@ async function startCETEP(){
   const english200Migration=applyEnglish200CourseMigration();
   const englishCanonicalMigration=applyEnglishCanonicalMigration();
   const teacherMediaCleanupMigration=applyTeacherMediaAdminCleanupMigration();
-  const englishLessonA01Migration=applyEnglishLessonA01Migration();
-  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied || english200Migration.applied || englishCanonicalMigration.applied || teacherMediaCleanupMigration.applied || englishLessonA01Migration.applied)){
+  const teacherApprovalMigration=applyTeacherApprovalMigration();
+  if(neonSql && (catalogMigration.applied || casasMigration.applied || anglaisVideoMigration.applied || englishLevelAMigration.applied || english200Migration.applied || englishCanonicalMigration.applied || teacherMediaCleanupMigration.applied || teacherApprovalMigration.applied)){
     await flushNeonSnapshot();
     console.log('[CETEP CATALOGUE] Nouvelle structure et tarifs sauvegardés dans Neon.');
   }
