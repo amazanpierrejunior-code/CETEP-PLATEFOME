@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.4-teacher-approval-american-english';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.6.7-free-telegram-enrollment-notifications';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
@@ -860,6 +860,39 @@ async function sendCETEPNotification(subject,html){
     return {sent:true,configured:true};
   }catch(error){console.error('[CETEP EMAIL]',error.message);return {sent:false,configured:true,error:error.message};}
 }
+// Secure Telegram notifications: only administrator-configured chat IDs receive alerts.
+// Never include identity documents, addresses, passwords, or uploaded files in Telegram.
+function telegramConfigured(){return Boolean(process.env.CETEP_TELEGRAM_BOT_TOKEN);}
+async function sendCETEPTelegram(chatId, body){
+  const id=String(chatId||'').trim();
+  if(!id || !telegramConfigured())return {sent:false,configured:telegramConfigured()};
+  try{
+    const response=await fetch(`https://api.telegram.org/bot${process.env.CETEP_TELEGRAM_BOT_TOKEN}/sendMessage`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chat_id:id,text:String(body||'').slice(0,3500),disable_web_page_preview:true})
+    });
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok || !data.ok){console.error('[CETEP TELEGRAM]',data.description||response.statusText);return {sent:false,configured:true,error:data.description||`Telegram HTTP ${response.status}`};}
+    return {sent:true,configured:true,message_id:data.result?.message_id||null};
+  }catch(error){console.error('[CETEP TELEGRAM]',error.message);return {sent:false,configured:true,error:error.message};}
+}
+async function sendEnrollmentTelegramNotifications(student, programName){
+  const direction=String(process.env.CETEP_DIRECTION_TELEGRAM_CHAT_IDS||'').split(/[;,\n]/).map(x=>x.trim()).filter(Boolean);
+  const secretariat=String(process.env.CETEP_SECRETARIAT_TELEGRAM_CHAT_IDS||'').split(/[;,\n]/).map(x=>x.trim()).filter(Boolean);
+  const jobs=[];
+  for(const chatId of direction)jobs.push(sendCETEPTelegram(chatId,`CETEP — Nouvo enskripsyon.\nNon: ${student.name}\nKòd: ${student.student_no}\nTanpri konekte nan espas Direction pou konsilte dosye a.`));
+  for(const chatId of secretariat)jobs.push(sendCETEPTelegram(chatId,`CETEP — Nouvo dosye pou verifye.\nNon: ${student.name}\nKòd: ${student.student_no}\nFòmasyon: ${programName}\nTanpri konekte nan espas Sekretarya a.`));
+  const results=await Promise.all(jobs);
+  return {sent:results.filter(x=>x.sent).length,total:results.length,configured:telegramConfigured(),results};
+}
+async function sendEnrollmentReceiptEmail(student, programName){
+  if(!student?.email || !mailConfigured())return {sent:false,configured:mailConfigured(),reason:student?.email?'smtp_not_configured':'no_student_email'};
+  const subject='CETEP — Réception de votre demande d’inscription';
+  const html=`<div style="font-family:Arial,sans-serif;line-height:1.6"><h2>Votre demande a bien été reçue</h2><p>Bonjour <b>${escapeHtml(student.name)}</b>,</p><p>Le CETEP a reçu votre demande d’inscription. Votre dossier est en attente de vérification par le secrétariat.</p><p><b>Code de dossier :</b> ${escapeHtml(student.student_no)}<br><b>Formation :</b> ${escapeHtml(programName||'')}</p><p>Nous vous contacterons après vérification.</p><p>CETEP — Formation • Orientation • Insertion professionnelle</p></div>`;
+  try{await mailTransport().sendMail({from:process.env.SMTP_FROM||process.env.SMTP_USER||CETEP_EMAIL,to:student.email,subject,html});return {sent:true,configured:true,to:student.email};}
+  catch(error){console.error('[CETEP APPLICANT EMAIL]',error.message);return {sent:false,configured:true,error:error.message};}
+}
+
 async function sendStudentConfirmation(student, programName){
   if(!student?.email || !mailConfigured()) return {sent:false,configured:mailConfigured(),reason:student?.email?'smtp_not_configured':'no_student_email'};
   const subject='CETEP — Confirmation de votre inscription';
@@ -1179,8 +1212,10 @@ app.post('/api/admissions',async (req,res)=>{
    return {studentId,studentNo,paymentId,isNew};
   });
   const out=tx();const saved=db.prepare('SELECT * FROM students WHERE id=?').get(out.studentId);
-  const emailNotification=await sendCETEPNotification('Demande d’inscription CETEP — '+out.studentNo,`<h2>Demande d’inscription CETEP</h2><p><b>Code étudiant :</b> ${escapeHtml(out.studentNo)}</p><p><b>Nom :</b> ${escapeHtml(saved.name)}</p><p><b>NIF :</b> ${escapeHtml(saved.nif||'Non fourni')}</p><p><b>CIN :</b> ${escapeHtml(saved.cin||'Non fourni')}</p><p><b>Formation :</b> ${escapeHtml(program.name)}</p><p><b>Statut :</b> En attente</p>`);
-  res.status(201).json({ok:true,student_no:out.studentNo,existing_student:!out.isNew,payment_id:out.paymentId,payment_status:out.paymentId?'En attente':null,amount_due:Number(program.price_htg||0),email_notification:emailNotification,message:out.isNew?'Inscription enregistrée.':'Nouvelle demande ajoutée au dossier étudiant existant.'});
+  const emailNotification=await sendCETEPNotification('Demande d’inscription CETEP — '+out.studentNo,`<h2>Demande d’inscription CETEP</h2><p><b>Code étudiant :</b> ${escapeHtml(out.studentNo)}</p><p><b>Nom :</b> ${escapeHtml(saved.name)}</p><p><b>Téléphone :</b> ${escapeHtml(saved.phone||'Non fourni')}</p><p><b>Email :</b> ${escapeHtml(saved.email||'Non fourni')}</p><p><b>NIF :</b> ${escapeHtml(saved.nif||'Non fourni')}</p><p><b>CIN :</b> ${escapeHtml(saved.cin||'Non fourni')}</p><p><b>Formation :</b> ${escapeHtml(program.name)}</p><p><b>Statut :</b> En attente</p>`);
+  const telegramNotifications=await sendEnrollmentTelegramNotifications(saved,program.name);
+  const applicantEmail=await sendEnrollmentReceiptEmail(saved,program.name);
+  res.status(201).json({ok:true,student_no:out.studentNo,existing_student:!out.isNew,payment_id:out.paymentId,payment_status:out.paymentId?'En attente':null,amount_due:Number(program.price_htg||0),email_notification:emailNotification,telegram_notifications:telegramNotifications,applicant_email:applicantEmail,message:out.isNew?'Inscription enregistrée.':'Nouvelle demande ajoutée au dossier étudiant existant.'});
  }catch(e){if(String(e.message).includes('UNIQUE constraint failed: students.nif'))return res.status(409).json({error:'Ce NIF est déjà enregistré dans CETEP.'});if(String(e.message).includes('UNIQUE constraint failed: students.cin'))return res.status(409).json({error:'Ce CIN est déjà enregistré dans CETEP.'});res.status(400).json({error:e.message});}
 });
 app.post('/api/public/enrollment-payment',async (req,res)=>{try{
