@@ -802,6 +802,65 @@ db.prepare("INSERT OR IGNORE INTO student_policy(id,title,content,version) VALUE
 
 function role(...roles){return (req,res,next)=>roles.includes(req.user?.role)?next():res.status(403).json({error:'Accès interdit'});}
 
+// Central academic visibility permissions: administrator is the only authority.
+db.exec(`CREATE TABLE IF NOT EXISTS role_permission_audit(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id INTEGER, actor_email TEXT,
+ target_role TEXT NOT NULL, permission TEXT NOT NULL, allowed INTEGER NOT NULL,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)`);
+const CETEP_PERMISSION_ROLES=['teacher','direction_general','direction_studies','secretary'];
+const CETEP_ACADEMIC_PERMISSIONS=['view_student_work','grade_student_work','view_academic_reports','view_all_student_work'];
+function cetepHasPermission(roleName, permission){
+ return Number(db.prepare('SELECT allowed FROM role_permissions WHERE role=? AND permission=?').get(roleName,permission)?.allowed||0)===1;
+}
+function requireCETEPPermission(permission){return (req,res,next)=>{
+ if(req.user?.role==='admin')return next();
+ if(!cetepHasPermission(req.user?.role,permission))return res.status(403).json({error:'Accès non autorisé. L’administrateur doit accorder cette permission.'});
+ next();
+};}
+app.get('/api/admin/role-permissions',auth,role('admin'),(req,res)=>{
+ const rows=db.prepare('SELECT role,permission,allowed,updated_by_email,updated_at FROM role_permissions WHERE role IN (?,?,?,?) ORDER BY role,permission').all(...CETEP_PERMISSION_ROLES);
+ res.json({roles:CETEP_PERMISSION_ROLES,permissions:CETEP_ACADEMIC_PERMISSIONS,items:rows});
+});
+app.put('/api/admin/role-permissions',auth,role('admin'),(req,res)=>{
+ const b=req.body||{},targetRole=String(b.role||''),permission=String(b.permission||''),allowed=b.allowed===true||b.allowed===1||b.allowed==='1';
+ if(!CETEP_PERMISSION_ROLES.includes(targetRole)||!CETEP_ACADEMIC_PERMISSIONS.includes(permission))return res.status(400).json({error:'Rôle ou permission invalide.'});
+ db.prepare(`INSERT INTO role_permissions(role,permission,allowed,updated_by,updated_by_email,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)
+ ON CONFLICT(role,permission) DO UPDATE SET allowed=excluded.allowed,updated_by=excluded.updated_by,updated_by_email=excluded.updated_by_email,updated_at=CURRENT_TIMESTAMP`).run(targetRole,permission,allowed?1:0,req.user.id,req.user.email);
+ db.prepare('INSERT INTO role_permission_audit(actor_id,actor_email,target_role,permission,allowed) VALUES(?,?,?,?,?)').run(req.user.id,req.user.email,targetRole,permission,allowed?1:0);
+ res.json({ok:true,role:targetRole,permission,allowed});
+});
+app.get('/api/admin/role-permissions/audit',auth,role('admin'),(req,res)=>res.json(db.prepare('SELECT * FROM role_permission_audit ORDER BY id DESC LIMIT 300').all()));
+
+// One consistent, read-only view of student submissions; access is permission-gated.
+function academicSubmissionRows(programIds){
+ const where=programIds===null?'':' AND m.program_id IN ('+programIds.map(()=>'?').join(',')+')';
+ return db.prepare(`SELECT sub.id submission_id,sub.assignment_id,sub.student_id,sub.answer,sub.file_url,sub.score,sub.feedback,sub.submitted_at,sub.graded_at,
+ a.title assignment_title,a.instructions,a.max_score,a.due_date,m.id module_id,m.title module_title,p.id program_id,p.name program_name,
+ st.student_no,st.name student_name
+ FROM submissions sub JOIN assignments a ON a.id=sub.assignment_id JOIN modules m ON m.id=a.module_id
+ JOIN programs p ON p.id=m.program_id JOIN students st ON st.id=sub.student_id
+ WHERE a.active=1${where} ORDER BY sub.submitted_at DESC`);
+}
+app.get('/api/admin/academic/submissions',auth,role('admin'),(req,res)=>res.json(academicSubmissionRows(null).all()));
+app.get('/api/teacher/submissions',auth,role('teacher'),requireCETEPPermission('view_student_work'),(req,res)=>{
+ const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));
+ if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+ const ids=db.prepare('SELECT program_id FROM program_teachers WHERE teacher_id=?').all(t.id).map(x=>Number(x.program_id));
+ if(!ids.length)return res.json([]);
+ res.json(academicSubmissionRows(ids).all(...ids));
+});
+app.get('/api/direction/academic/submissions',auth,role('direction_general','direction_studies'),requireCETEPPermission('view_student_work'),(req,res)=>res.json(academicSubmissionRows(null).all()));
+app.get('/api/secretary/academic/submissions',auth,role('secretary'),requireCETEPPermission('view_student_work'),(req,res)=>res.json(academicSubmissionRows(null).all()));
+app.patch('/api/teacher/submissions/:id/grade',auth,role('teacher'),requireCETEPPermission('grade_student_work'),(req,res)=>{
+ const t=db.prepare('SELECT id FROM teachers WHERE id=? AND active=1').get(Number(req.user.id));if(!t)return res.status(401).json({error:'Compte professeur inactif ou introuvable.'});
+ const id=Number(req.params.id),score=Number(req.body?.score),feedback=String(req.body?.feedback||'').trim();
+ const row=db.prepare(`SELECT sub.id,a.max_score,m.program_id FROM submissions sub JOIN assignments a ON a.id=sub.assignment_id JOIN modules m ON m.id=a.module_id WHERE sub.id=?`).get(id);
+ if(!row||!db.prepare('SELECT 1 FROM program_teachers WHERE teacher_id=? AND program_id=?').get(t.id,row.program_id))return res.status(403).json({error:'Ce travail ne fait pas partie de vos formations affectées.'});
+ if(!Number.isFinite(score)||score<0||score>Number(row.max_score))return res.status(400).json({error:'La note doit être comprise entre 0 et le maximum autorisé.'});
+ db.prepare('UPDATE submissions SET score=?,feedback=?,graded_at=CURRENT_TIMESTAMP WHERE id=?').run(score,feedback,id);res.json({ok:true});
+});
+
 // Natural American English audio for authenticated CETEP students.
 // Keep ELEVENLABS_API_KEY on the server (Render Environment), never in browser code.
 app.post('/api/student/english-speech',auth,role('student'),async(req,res)=>{
