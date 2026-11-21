@@ -1,13 +1,13 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.8.3-admin-permissions-work-review';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.8.1-natural-english-voice';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
 if(IS_PRODUCTION && (!CONFIGURED_SECRET || CONFIGURED_SECRET==='CHANGE_ME_IN_RENDER' || CONFIGURED_SECRET.length<32)){
   throw new Error('Configuration CETEP invalide: définissez JWT_SECRET avec une valeur aléatoire d’au moins 32 caractères dans l’environnement de production.');
 }
-app.use(express.json({limit:'60mb'}));app.use(express.urlencoded({extended:true,limit:'60mb'}));app.use(cookieParser());
+app.use(express.json({limit:'20mb'}));app.use(express.urlencoded({extended:true,limit:'20mb'}));app.use(cookieParser());
 // Neon snapshot persistence: every request that performs a tracked SQLite write
 // must wait for the remote snapshot to be committed before returning success.
 const {AsyncLocalStorage}=require('async_hooks');
@@ -153,26 +153,6 @@ CREATE TABLE IF NOT EXISTS academic_grades(
  FOREIGN KEY(term_id) REFERENCES academic_terms(id) ON DELETE CASCADE
 );
 `);
-// Pièces justificatives des admissions: les fichiers restent dans DATA_DIR (disque persistant Render),
-// tandis que SQLite/Neon conserve les métadonnées. Aucun document n'est exposé en statique.
-db.exec(`CREATE TABLE IF NOT EXISTS applicant_documents(
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- student_id INTEGER NOT NULL,
- document_type TEXT NOT NULL,
- original_name TEXT NOT NULL,
- stored_name TEXT NOT NULL UNIQUE,
- mime_type TEXT NOT NULL,
- file_size INTEGER NOT NULL,
- status TEXT NOT NULL DEFAULT 'En attente',
- review_note TEXT,
- reviewed_by INTEGER,
- reviewed_by_email TEXT,
- uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
- reviewed_at TEXT,
- FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
-)`);
-const ADMISSION_DOC_DIR=path.join(DATA_DIR,'applicant-documents');
-fs.mkdirSync(ADMISSION_DOC_DIR,{recursive:true});
 // Safe schema upgrades for existing CETEP databases.
 function ensureColumn(table,column,definition){
   const cols=db.prepare(`PRAGMA table_info(${table})`).all().map(x=>x.name);
@@ -1284,56 +1264,9 @@ app.get('/api/secretary/reports/daily',auth,role('secretary'),(req,res)=>res.jso
 
 app.get('/api/public/settings',(req,res)=>res.json(settings()));
 app.get('/api/public/student-lookup',(req,res)=>{res.set('Cache-Control','no-store');res.json({verified:false,message:'Pour protéger les données personnelles, la vérification de l’identité se fait lors de l’envoi du formulaire.'})});app.get('/api/public/programs',(req,res)=>res.json(db.prepare('SELECT * FROM programs WHERE active=1 ORDER BY id').all()));app.get('/api/public/support',(req,res)=>res.json(db.prepare('SELECT id,name,account_name,account_value,bank_name,bank_account,routing,instructions FROM support_methods WHERE active=1 ORDER BY sort_order,id').all()));app.get('/api/public/gallery',(req,res)=>res.json(db.prepare('SELECT id,title,description,image_url FROM gallery WHERE active=1 ORDER BY sort_order,id DESC').all()));
-// Decode and persist a strictly validated admission document.
-function saveAdmissionDocument(studentId, item){
- const allowedTypes=new Set(['identite','acte_naissance','photo_passeport','diplome_certificat','autre']);
- const type=String(item?.type||'autre');
- if(!allowedTypes.has(type))throw new Error('Type de pièce justificative invalide.');
- const data=String(item?.data||'');
- const match=data.match(/^data:(application\/pdf|image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
- if(!match)throw new Error('Format de document invalide. Utilisez JPG, PNG, WEBP ou PDF.');
- const mime=match[1].toLowerCase(),buffer=Buffer.from(match[2],'base64');
- if(!buffer.length||buffer.length>5*1024*1024)throw new Error('Chaque document doit peser 5 Mo maximum.');
- const ext=({ 'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png','image/webp':'webp'})[mime];
- const storedName=crypto.randomBytes(24).toString('hex')+'.'+ext;
- const target=path.join(ADMISSION_DOC_DIR,storedName);
- fs.writeFileSync(target,buffer,{flag:'wx',mode:0o600});
- try{
-  const result=db.prepare(`INSERT INTO applicant_documents(student_id,document_type,original_name,stored_name,mime_type,file_size)
-   VALUES(?,?,?,?,?,?)`).run(studentId,type,String(item.name||('document.'+ext)).replace(/[\\/\\\\\x00-\x1f]/g,'_').slice(0,180),storedName,mime,buffer.length);
-  return Number(result.lastInsertRowid);
- }catch(error){try{fs.unlinkSync(target)}catch{}throw error;}
-}
-app.get('/api/secretary/applicant-documents',auth,role('admin','secretary'),(req,res)=>{
- const q=String(req.query.q||'').trim();const like='%'+q+'%';
- const rows=db.prepare(`SELECT d.id,d.student_id,d.document_type,d.original_name,d.file_size,d.status,d.review_note,d.uploaded_at,
-  s.name student_name,s.student_no FROM applicant_documents d JOIN students s ON s.id=d.student_id
-  WHERE (?='' OR s.name LIKE ? OR s.student_no LIKE ?) ORDER BY d.id DESC LIMIT 300`).all(q,like,like);
- res.set('Cache-Control','no-store');res.json(rows);
-});
-app.get('/api/secretary/applicant-documents/:id/file',auth,role('admin','secretary'),(req,res)=>{
- const row=db.prepare('SELECT * FROM applicant_documents WHERE id=?').get(Number(req.params.id));
- if(!row)return res.status(404).send('Document introuvable.');
- const target=path.resolve(ADMISSION_DOC_DIR,row.stored_name);
- if(!target.startsWith(path.resolve(ADMISSION_DOC_DIR)+path.sep)||!fs.existsSync(target))return res.status(404).send('Fichier introuvable sur le stockage CETEP.');
- res.set({'Content-Type':row.mime_type,'Content-Disposition':`inline; filename="${encodeURIComponent(row.original_name)}"`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'});
- fs.createReadStream(target).pipe(res);
-});
-app.put('/api/secretary/applicant-documents/:id/review',auth,role('admin','secretary'),(req,res)=>{
- const id=Number(req.params.id),status=String(req.body?.status||''),note=String(req.body?.note||'').slice(0,1000);
- if(!['Validé','Refusé','En attente'].includes(status))return res.status(400).json({error:'Statut de vérification invalide.'});
- if(status==='Refusé'&&!note.trim())return res.status(400).json({error:'Le motif du refus est obligatoire.'});
- const result=db.prepare(`UPDATE applicant_documents SET status=?,review_note=?,reviewed_by=?,reviewed_by_email=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?`).run(status,note||null,req.user.id,req.user.email,id);
- if(!result.changes)return res.status(404).json({error:'Document introuvable.'});
- res.json({ok:true,id,status});
-});
-
 app.post('/api/admissions',async (req,res)=>{
  try{
   const b=req.body||{},nif=normalizeIdentity(b.nif),cin=normalizeIdentity(b.cin),programId=Number(b.program_id);
-  const submittedDocs=Array.isArray(b.documents)?b.documents:[];
-  if(submittedDocs.length>8)return res.status(400).json({error:'Maximum 8 documents par dossier.'});
-  for(const item of submittedDocs){const type=String(item?.type||'autre'),data=String(item?.data||'');if(!['identite','acte_naissance','photo_passeport','diplome_certificat','autre'].includes(type)||!/^data:(application\/pdf|image\/(?:jpeg|png|webp));base64,[A-Za-z0-9+/=]+$/i.test(data))return res.status(400).json({error:'Une pièce justificative est invalide. Formats acceptés : PDF, JPG, PNG ou WEBP.'});const encoded=data.slice(data.indexOf(',')+1);if(Buffer.from(encoded,'base64').length>5*1024*1024)return res.status(400).json({error:'Chaque document doit peser 5 Mo maximum.'});}
   if(!b.name||!b.phone||!programId)return res.status(400).json({error:'Nom, téléphone et formation obligatoires'});
   if(!nif&&!cin)return res.status(400).json({error:'NIF ou CIN obligatoire pour l’inscription.'});
   const program=db.prepare('SELECT * FROM programs WHERE id=? AND active=1').get(programId);if(!program)return res.status(400).json({error:'Formation introuvable'});
@@ -1363,18 +1296,11 @@ app.post('/api/admissions',async (req,res)=>{
    if(b.payment_method&&Number(b.payment_amount)>0){const ref=b.payment_reference||('ENR-'+studentNo+'-'+programId+'-'+Date.now());const pr=db.prepare('INSERT INTO payments(student_id,program_id,amount_htg,method,status,reference,payment_message,payment_proof) VALUES(?,?,?,?,?,?,?,?)').run(studentId,programId,Number(b.payment_amount),String(b.payment_method),'En attente',ref,b.payment_message||null,b.payment_proof||null);paymentId=Number(pr.lastInsertRowid);}
    return {studentId,studentNo,paymentId,isNew};
   });
-  const out=tx();
-  const savedDocumentIds=[];
-  try{for(const item of submittedDocs)savedDocumentIds.push(saveAdmissionDocument(out.studentId,item));}
-  catch(error){
-   for(const id of savedDocumentIds){const row=db.prepare('SELECT stored_name FROM applicant_documents WHERE id=?').get(id);if(row){try{fs.unlinkSync(path.join(ADMISSION_DOC_DIR,row.stored_name))}catch{}db.prepare('DELETE FROM applicant_documents WHERE id=?').run(id);}}
-   throw error;
-  }
-  const saved=db.prepare('SELECT * FROM students WHERE id=?').get(out.studentId);
+  const out=tx();const saved=db.prepare('SELECT * FROM students WHERE id=?').get(out.studentId);
   const emailNotification=await sendCETEPNotification('Demande d’inscription CETEP — '+out.studentNo,`<h2>Demande d’inscription CETEP</h2><p><b>Code étudiant :</b> ${escapeHtml(out.studentNo)}</p><p><b>Nom :</b> ${escapeHtml(saved.name)}</p><p><b>Code de dossier :</b> ${escapeHtml(saved.student_no)}</p><p><b>Formation :</b> ${escapeHtml(program.name)}</p><p><b>Statut :</b> En attente</p>`);
   const roleEmailNotifications=await sendEnrollmentEmailNotifications(saved,program.name);
   const applicantEmail=await sendEnrollmentReceiptEmail(saved,program.name);
-  res.status(201).json({ok:true,student_no:out.studentNo,existing_student:!out.isNew,documents_saved:savedDocumentIds.length,payment_id:out.paymentId,payment_status:out.paymentId?'En attente':null,amount_due:Number(program.price_htg||0),email_notification:emailNotification,role_email_notifications:roleEmailNotifications,applicant_email:applicantEmail,message:out.isNew?'Inscription enregistrée.':'Nouvelle demande ajoutée au dossier étudiant existant.'});
+  res.status(201).json({ok:true,student_no:out.studentNo,existing_student:!out.isNew,payment_id:out.paymentId,payment_status:out.paymentId?'En attente':null,amount_due:Number(program.price_htg||0),email_notification:emailNotification,role_email_notifications:roleEmailNotifications,applicant_email:applicantEmail,message:out.isNew?'Inscription enregistrée.':'Nouvelle demande ajoutée au dossier étudiant existant.'});
  }catch(e){if(String(e.message).includes('UNIQUE constraint failed: students.nif'))return res.status(409).json({error:'Ce NIF est déjà enregistré dans CETEP.'});if(String(e.message).includes('UNIQUE constraint failed: students.cin'))return res.status(409).json({error:'Ce CIN est déjà enregistré dans CETEP.'});res.status(400).json({error:e.message});}
 });
 app.post('/api/public/enrollment-payment',async (req,res)=>{try{
@@ -1976,7 +1902,6 @@ async function sendCertificatePdf(req,res,certificateId,isAdmin){
 }
 
 app.post('/api/student/progress',auth,role('student'),(req,res)=>{const lessonId=Number(req.body.lesson_id);const lesson=db.prepare(`SELECT m.program_id FROM lessons l JOIN modules m ON m.id=l.module_id WHERE l.id=? AND l.active=1 AND m.active=1 AND (l.created_by_role!='teacher' OR l.publication_status='Approuve')`).get(lessonId);if(!lesson)return res.status(404).json({error:'Leçon introuvable'});let progressAuthorized=!!db.prepare("SELECT 1 FROM enrollments WHERE student_id=? AND program_id=? AND status='Actif' AND access_enabled=1").get(req.user.id,lesson.program_id);if(!progressAuthorized){const course=db.prepare("SELECT id FROM programs WHERE id=? AND (lower(name) LIKE '%english%casas%' OR lower(name) LIKE '%english%casas%')").get(lesson.program_id);if(course)progressAuthorized=!!db.prepare("SELECT 1 FROM enrollments e JOIN programs p ON p.id=e.program_id WHERE e.student_id=? AND e.status='Actif' AND e.access_enabled=1 AND lower(p.name) LIKE '%anglais%'").get(req.user.id);}if(!progressAuthorized)return res.status(403).json({error:'Accès non autorisé à cette formation'});db.prepare('INSERT INTO lesson_progress(student_id,lesson_id,completed,completed_at) VALUES(?,?,1,CURRENT_TIMESTAMP) ON CONFLICT(student_id,lesson_id) DO UPDATE SET completed=1,completed_at=CURRENT_TIMESTAMP').run(req.user.id,lessonId);res.json({ok:true,certificate:autoCertificateForStudent(req.user.id,lesson.program_id)});});
-app.get('/documents',(req,res)=>res.sendFile(path.join(__dirname,'public','documents.html')));
 app.use((req,res)=>{if(req.path.startsWith('/api/'))return res.status(404).json({error:'Route API introuvable',path:req.path});res.status(404).send('Page introuvable');});
 app.use((err,req,res,next)=>{console.error('CETEP ERROR',err);if(res.headersSent)return next(err);res.status(500).json({error:'Erreur interne du serveur'});});
 // SQLite remains the application query engine for compatibility, while Neon stores
@@ -2037,12 +1962,7 @@ async function restoreNeonSnapshot(snapshot){
     // when restoring an older Neon snapshot that predates the student rules.
     'student_policy',
     'student_policy_acceptances',
-    'teacher_publication_audit',
-    // Added in v15.8.2: documents metadata is additive; old snapshots must not block startup.
-    'applicant_documents',
-    // Added in v15.8.1: preserve the locally initialized role-permission audit table
-    // when restoring a Neon snapshot created before this feature.
-    'role_permission_audit'
+    'teacher_publication_audit'
   ];
 
   for (const name of backwardCompatibleTables) {
