@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto=require('crypto');const zlib=require('zlib');const express=require('express');const PDFDocument=require('pdfkit');const QRCode=require('qrcode');const cookieParser=require('cookie-parser');const bcrypt=require('bcryptjs');const jwt=require('jsonwebtoken');const Database=require('better-sqlite3');const path=require('path');const fs=require('fs');const nodemailer=require('nodemailer');
-const app=express();app.set('trust proxy',1);const APP_VERSION='15.8.2-admission-documents-neon-compat';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
+const app=express();app.set('trust proxy',1);const APP_VERSION='15.8.3-admin-permissions-work-review';const CERTIFICATE_MODEL_FILE='cetep-certificate-background-v15-2.png';const PORT=process.env.PORT||10000;const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,'data');fs.mkdirSync(DATA_DIR,{recursive:true});
 // Fail closed in production: never sign sessions with a public placeholder secret.
 const IS_PRODUCTION=process.env.NODE_ENV==='production';
 const CONFIGURED_SECRET=String(process.env.JWT_SECRET||'').trim();
